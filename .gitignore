@@ -210,3 +210,6 @@ data/raw/
 data/processed/
 data/cache/
 .env
+
+# macOS
+.DS_Store

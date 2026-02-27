@@ -1,66 +1,68 @@
 """
 Gradio web application entry point for the World Cup Squad Builder.
-
-Owner:
-    Person C
-
-Purpose:
-    - Provide a simple, interactive UI for users to:
-        * Enter natural-language squad requests (e.g., constraints, style).
-        * See the generated squad report returned by the LangChain agent.
-        * Optionally select sample prompts, budget sliders, and formation
-          preferences to guide the agent.
-    - Serve as the main demo interface during the hackathon presentation.
-
-Dependencies (for eventual implementation):
-    - `gradio` (e.g., `gradio as gr`)
-    - `src.agent.create_agent`
-    - `src.agent.run_query`
-
-Target UI structure (based on Lab 7 / HealthLLM pattern):
-    - Use `gr.Blocks()` to construct the layout.
-    - Components:
-        * Textbox for user input prompt.
-        * Textbox or Markdown component for displaying the agent's response.
-        * Button to submit the query.
-        * Optional:
-            - Sample query buttons.
-            - Slider for budget constraint.
-            - Dropdown for preferred formation or play style.
-    - On app startup:
-        * Instantiate the agent via `create_agent()`.
-        * Bind the submit button (and optional sample buttons) to a function
-          that calls `run_query(agent, user_input)` and updates the output area.
 """
 
-from typing import Any
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+import gradio as gr
+
+from src.agent import create_agent, run_query
+
+# Create agent once at startup (lazy so Gradio can load without API key)
+_agent = None
+
+
+def get_agent():
+    global _agent
+    if _agent is None:
+        _agent = create_agent()
+    return _agent
+
+
+def respond(user_input: str, _budget: float) -> str:
+    if not user_input or not user_input.strip():
+        return "Please enter a request, e.g. 'Build me a World Cup squad with fast attackers and strong defenders, budget under 500000 EUR'."
+    agent = get_agent()
+    if _budget and _budget > 0:
+        user_input = f"{user_input} (Total wage budget: {int(_budget)} EUR)"
+    return run_query(agent, user_input.strip())
 
 
 def launch_app() -> None:
-    """
-    Set up and (eventually) launch the Gradio app for the squad builder.
+    with gr.Blocks() as demo:
+        gr.Markdown("# World Cup Squad Builder")
+        gr.Markdown("Build an optimal 23-player squad from FIFA/EA Sports FC 24 player data. Ask in natural language (e.g. fast defenders, young midfielders, budget limit).")
+        budget_slider = gr.Slider(
+            minimum=0,
+            maximum=2_000_000,
+            value=0,
+            step=50_000,
+            label="Optional total wage budget (EUR). 0 = no limit.",
+        )
+        inp = gr.Textbox(
+            label="Your request",
+            placeholder="e.g. Build me a World Cup squad with fast attackers and strong defenders, budget under 500000 EUR",
+            lines=3,
+        )
+        out = gr.Markdown(label="Squad report")
+        btn = gr.Button("Build squad")
+        btn.click(fn=respond, inputs=[inp, budget_slider], outputs=out)
 
-    Responsibilities (for implementation):
-        - Call `create_agent()` once at startup to obtain the configured agent.
-        - Define the Gradio Blocks interface:
-            * Input components for text prompt and optional controls.
-            * Output component for the squad report.
-            * Event handlers that:
-                - Collect UI inputs,
-                - Call `run_query(agent, user_input)`,
-                - Display the resulting report.
-        - Call `demo.launch()` or equivalent to start the app when appropriate.
+        gr.Markdown("### Sample queries")
+        samples = [
+            "Load the player data and build me a balanced World Cup squad.",
+            "Find fast defenders and build a squad with a solid defense, budget under 400000 EUR.",
+            "Build a squad focused on pace and young high-potential players.",
+        ]
+        for s in samples:
+            bt = gr.Button(s)
+            bt.click(fn=lambda q=s: respond(q, 0), inputs=[], outputs=out)
 
-    Parameters:
-        None.
+    demo.launch()
 
-    Returns:
-        None. Side effect is to start the Gradio server when implemented.
 
-    Notes for implementation:
-        - Keep the interface consistent with class labs to simplify grading.
-        - Consider adding a few pre-filled example prompts to showcase different
-          use cases (e.g., pace-focused squad, budget-restricted squad).
-    """
-    pass
-
+if __name__ == "__main__":
+    launch_app()

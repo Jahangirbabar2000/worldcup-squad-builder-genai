@@ -1,177 +1,104 @@
 """
 LangChain tools wrapping each pipeline stage for agent orchestration.
-
-Owner:
-    Person C
-
-Purpose:
-    - Expose the main pipeline capabilities as LangChain `Tool` objects so
-      that an agent can call them in a ReAct-style reasoning loop.
-    - Each tool should correspond to one or more stages of the pipeline:
-        * Data ingestion
-        * Retrieval / filtering
-        * Reasoning / aggregation
-        * Report generation
-
-Dependencies (for eventual implementation):
-    - `langchain.tools.Tool`
-    - `src.ingestion.load_and_clean_data`
-    - `src.retrieval.create_vector_store`, `src.retrieval.get_retriever`, `src.retrieval.retrieve_players`
-    - `src.reasoning.build_squad`
-    - `src.synthesis.generate_report`
-
-Naming conventions (as per assignment guidance):
-    - data_ingestion_tool
-    - retrieval_or_filter_tool
-    - reasoning_or_aggregation_tool
-    - report_generation_tool
-
-Important design note:
-    - LangChain tools typically accept a single string argument. For more complex
-      inputs (e.g., JSON with constraints), define thin wrapper functions that:
-        * accept a string, parse or deserialize it, call the underlying
-          pipeline function(s), then
-        * return a stringified representation suitable for the agent.
-    - This file only defines function signatures and documentation; actual `Tool`
-      instances should be created in the implementation phase.
 """
 
-from typing import Any
+import json
+from typing import Any, List
+
+from langchain_core.tools import Tool
+
+from src import ingestion, retrieval, reasoning, synthesis
+
+# Module-level cache for documents and vector store (set by ingestion, used by retrieval)
+_cached_documents: List[Any] = []
+_cached_vector_store: Any = None
+_cached_retriever: Any = None
 
 
 def data_ingestion_tool_fn(input_str: str) -> str:
-    """
-    Wrapper function intended to back the `data_ingestion_tool` LangChain Tool.
-
-    Intended behavior (for implementation):
-        - Ignore or lightly interpret `input_str` (since ingestion does not
-          typically need complex parameters), or optionally accept configuration
-          flags from the string.
-        - Call `src.ingestion.load_and_clean_data()` to:
-            * Load raw data
-            * Clean and normalize it
-            * Cache the processed CSV
-            * Convert rows to `Document` objects
-        - Optionally serialize or summarize the resulting documents (e.g., as JSON
-          or a descriptive string) to return to the agent.
-
-    Parameters:
-        input_str:
-            Placeholder string input required by the LangChain `Tool` interface.
-            May be unused or reserved for configuration in the future.
-
-    Returns:
-        A string representation or summary of the ingested and cleaned player data
-        suitable for the agent to reason about or pass to other tools.
-
-    Notes for implementation:
-        - The actual `Tool` object should be declared elsewhere as:
-              Tool(
-                  name="data_ingestion_tool",
-                  func=data_ingestion_tool_fn,
-                  description="Loads and cleans FIFA player data."
-              )
-        - Ensure that any heavy objects (e.g., full document lists) are either
-          cached or referenced indirectly to avoid unnecessary serialization.
-    """
-    pass
+    """Load and clean FIFA player data; cache documents for retrieval."""
+    global _cached_documents, _cached_vector_store, _cached_retriever
+    _cached_documents = ingestion.load_and_clean_data()
+    _cached_vector_store = None
+    _cached_retriever = None
+    return f"Loaded and cleaned {len(_cached_documents)} players. Use retrieval_or_filter_tool to find players by criteria."
 
 
 def retrieval_or_filter_tool_fn(input_str: str) -> str:
-    """
-    Wrapper function intended to back the `retrieval_or_filter_tool` LangChain Tool.
-
-    Intended behavior (for implementation):
-        - Interpret `input_str` as a natural-language query describing desired
-          player traits (e.g., "fast defenders", "young high-potential midfielders").
-        - Ensure that a retriever exists by:
-            * Accessing or constructing a FAISS vector store from ingested documents.
-            * Calling `src.retrieval.get_retriever(vector_store, k=10)` or similar.
-        - Use `src.retrieval.retrieve_players(query, retriever)` to obtain
-          a shortlist of candidate players.
-        - Return the shortlist in a serialized form (e.g., JSON) that can be
-          consumed by the reasoning tool or agent.
-
-    Parameters:
-        input_str:
-            Natural-language description of the player search criteria.
-
-    Returns:
-        A string representation (e.g., JSON) of retrieved player candidates.
-
-    Notes for implementation:
-        - Consider caching the vector store and retriever so that repeated calls
-          do not recompute embeddings.
-        - Clearly document the serialization format so that the reasoning tool
-          can parse it reliably.
-    """
-    pass
+    """Retrieve players matching the query; returns JSON list of player dicts."""
+    global _cached_documents, _cached_vector_store, _cached_retriever
+    query = (input_str or "best players").strip()
+    if not query:
+        query = "best players"
+    if not _cached_documents and not _cached_vector_store:
+        _cached_documents = ingestion.load_and_clean_data()
+    if not _cached_documents:
+        return "No player data available. Run data_ingestion_tool first."
+    if _cached_vector_store is None:
+        _cached_vector_store = retrieval.create_vector_store(_cached_documents)
+        _cached_retriever = retrieval.get_retriever(_cached_vector_store, k=30)
+    docs = retrieval.retrieve_players(query, _cached_retriever)
+    shortlist = []
+    for d in docs:
+        shortlist.append(d.metadata if hasattr(d, "metadata") else {})
+    return json.dumps({"shortlist": shortlist, "query": query})
 
 
 def reasoning_or_aggregation_tool_fn(input_str: str) -> str:
-    """
-    Wrapper function intended to back the `reasoning_or_aggregation_tool` LangChain Tool.
-
-    Intended behavior (for implementation):
-        - Interpret `input_str` as a serialized object (e.g., JSON) that encodes:
-            * shortlist: list of player dictionaries
-            * constraints: dictionary with max_players, positional minimums, budget, etc.
-            * user_preferences: string describing style and priorities
-        - Deserialize this input into Python structures.
-        - Call `src.reasoning.build_squad(shortlist, constraints, user_preferences)`
-          to obtain the final squad structure.
-        - Serialize the resulting squad dict back into a string (e.g., JSON)
-          for the agent or downstream tools.
-
-    Parameters:
-        input_str:
-            A serialized representation of the inputs required by `build_squad`.
-
-    Returns:
-        A string representation (e.g., JSON) of the final squad structure,
-        including selected and excluded players, total wage, and formation notes.
-
-    Notes for implementation:
-        - Make sure to define and document the expected JSON schema for `input_str`
-          and the returned string.
-        - Any validation errors or constraint violations should be handled by
-          `build_squad` and/or clearly surfaced in the output.
-    """
-    pass
+    """Build squad from shortlist; input is JSON with shortlist, constraints, user_preferences."""
+    try:
+        data = json.loads(input_str)
+    except json.JSONDecodeError:
+        return "Invalid JSON. Provide a JSON object with keys: shortlist, constraints (max_players, min_gk, min_def, min_mid, min_fwd, budget?), user_preferences."
+    shortlist = data.get("shortlist", [])
+    constraints = data.get("constraints", {})
+    if not isinstance(constraints, dict):
+        constraints = {}
+    user_preferences = data.get("user_preferences", "") or ""
+    if not shortlist:
+        return "Shortlist is empty. Use retrieval_or_filter_tool first to get players."
+    constraints.setdefault("max_players", 23)
+    constraints.setdefault("min_gk", 3)
+    constraints.setdefault("min_def", 6)
+    constraints.setdefault("min_mid", 6)
+    constraints.setdefault("min_fwd", 4)
+    squad = reasoning.build_squad(shortlist, constraints, user_preferences)
+    return json.dumps(squad, default=str)
 
 
 def report_generation_tool_fn(input_str: str) -> str:
-    """
-    Wrapper function intended to back the `report_generation_tool` LangChain Tool.
+    """Generate formatted report; input is JSON with squad and constraints_applied."""
+    try:
+        data = json.loads(input_str)
+    except json.JSONDecodeError:
+        return "Invalid JSON. Provide a JSON object with keys: squad, constraints_applied."
+    squad = data.get("squad", {})
+    constraints_applied = data.get("constraints_applied", {})
+    return synthesis.generate_report(squad, constraints_applied)
 
-    Intended behavior (for implementation):
-        - Interpret `input_str` as a serialized structure (e.g., JSON) containing:
-            * squad: the structured squad dict from `build_squad`
-            * constraints_applied: the constraints dict used to generate the squad
-        - Deserialize into Python objects.
-        - Call `src.synthesis.generate_report(squad, constraints_applied)` to
-          produce a user-facing report string.
-        - Return that report string directly to the agent.
 
-    Parameters:
-        input_str:
-            Serialized representation of the `squad` and `constraints_applied`
-            needed by `generate_report`.
+data_ingestion_tool = Tool(
+    name="data_ingestion_tool",
+    func=data_ingestion_tool_fn,
+    description="Loads and cleans FIFA player data from the dataset. Call this first when the user wants to build a squad. Input can be empty or any message.",
+)
 
-    Returns:
-        A human-readable report string ready to display in the Gradio UI or as
-        the agent's final answer.
+retrieval_or_filter_tool = Tool(
+    name="retrieval_or_filter_tool",
+    func=retrieval_or_filter_tool_fn,
+    description="Use this tool to find players matching specific criteria. Input: natural language query, e.g. 'fast defenders', 'best free kick takers', 'young high-potential midfielders', 'cheap goalkeepers'. Returns a shortlist as JSON.",
+)
 
-    Notes for implementation:
-        - This tool is likely to be called near the end of the agent's reasoning
-          chain to synthesize all previous steps into a polished response.
-        - Ensure that any serialization/deserialization logic is robust and
-          well-documented for grading.
-    """
-    pass
+reasoning_or_aggregation_tool = Tool(
+    name="reasoning_or_aggregation_tool",
+    func=reasoning_or_aggregation_tool_fn,
+    description="Use this tool to select the final squad from a shortlist of players, applying roster constraints (max 23 players, min 3 GK, min 6 DEF, min 6 MID, min 4 FWD, optional budget). Input: JSON string with keys 'shortlist' (from retrieval tool), 'constraints', 'user_preferences'.",
+)
 
-# NOTE:
-# Actual `Tool` objects (e.g., `data_ingestion_tool`, `retrieval_or_filter_tool`,
-# `reasoning_or_aggregation_tool`, `report_generation_tool`) should be created
-# in the implementation phase using the above *_fn wrappers.
+report_generation_tool = Tool(
+    name="report_generation_tool",
+    func=report_generation_tool_fn,
+    description="Use this tool to generate the final formatted squad report for the user. Input: JSON string with keys 'squad' (from reasoning tool output) and 'constraints_applied'.",
+)
 
+ALL_TOOLS = [data_ingestion_tool, retrieval_or_filter_tool, reasoning_or_aggregation_tool, report_generation_tool]

@@ -1,68 +1,103 @@
 """
 Centralized prompt templates for the World Cup Squad Builder project.
-
-Owner:
-    Initial drafts by Person A, refinements by Person B and Person C.
-
-Purpose:
-    - Define and document all LLM prompts used across the four pipeline stages:
-        * Optional retrieval query rewriting (Stage 2).
-        * Squad reasoning and constraint satisfaction (Stage 3).
-        * Final report synthesis (Stage 4).
-        * Agent system / orchestration prompt for ReAct-style reasoning.
-    - Allow graders to inspect a single file to understand all LLM interactions,
-      which is important for the architecture and responsible AI grading criteria.
-
-Dependencies (for eventual implementation):
-    - `langchain.prompts.PromptTemplate` or `langchain_core.prompts.PromptTemplate`.
-
-Expected prompt templates (to be implemented as module-level `PromptTemplate` variables):
-    - RETRIEVAL_QUERY_PROMPT:
-        * Input variables: `user_query`
-        * Goal: Convert casual user descriptions into concise attribute-based
-          retrieval queries (e.g., stats and positions).
-    - REASONING_PROMPT:
-        * Input variables: `candidates`, `constraints`, `user_preferences`
-        * Goal: Select exactly N players from a candidate list while respecting
-          hard roster constraints and optional budget, providing justifications,
-          excluded players, and tradeoffs in a structured, parseable format.
-    - SYNTHESIS_PROMPT:
-        * Input variables: `squad`, `constraints_applied`
-        * Goal: Generate a formatted squad report with player table, squad
-          philosophy, budget summary, notable exclusions, data-source citation,
-          and an educational-use disclaimer.
-    - AGENT_SYSTEM_PROMPT:
-        * Input variables: (as needed for agent creation)
-        * Goal: Describe the agent's role, tools, and ReAct-style behavior,
-          ensuring it reasons step-by-step with Thought → Action → Observation
-          loops and uses tools appropriately.
-
-Implementation notes:
-    - When implemented, each prompt should be declared as a module-level variable, e.g.:
-        RETRIEVAL_QUERY_PROMPT: PromptTemplate = PromptTemplate(...)
-        REASONING_PROMPT: PromptTemplate = PromptTemplate(...)
-        SYNTHESIS_PROMPT: PromptTemplate = PromptTemplate(...)
-        AGENT_SYSTEM_PROMPT: PromptTemplate = PromptTemplate(...)
-    - Output formats for reasoning/synthesis prompts should be structured
-      (e.g., JSON-like or clearly parseable sections) to support validation
-      and post-processing in `src.reasoning` and `src.synthesis`.
-    - Prompts should explicitly instruct the model to:
-        * Reference actual stats from the input.
-        * Respect hard constraints (no violating roster rules).
-        * State limitations and assumptions (for responsible AI).
 """
 
-# NOTE:
-# No PromptTemplate instances are created here yet, in accordance with the
-# "no implementation code" scaffolding requirement. Instead, this file
-# serves as a specification for how Person A/B/C should define them.
-#
-# Suggested future structure (for implementers):
-#
-# from langchain_core.prompts import PromptTemplate
-#
-# RETRIEVAL_QUERY_PROMPT: PromptTemplate
-# REASONING_PROMPT: PromptTemplate
-# SYNTHESIS_PROMPT: PromptTemplate
-# AGENT_SYSTEM_PROMPT: PromptTemplate
+from langchain_core.prompts import PromptTemplate
 
+RETRIEVAL_QUERY_PROMPT = PromptTemplate(
+    input_variables=["user_query"],
+    template="""Convert the following casual user request about building a football/soccer squad into a concise search query focused on player attributes (positions, stats like pace/defending/shooting, age, wage, nationality, etc.). Output only the search query, no explanation.
+
+User request: {user_query}
+
+Search query:""",
+)
+
+REASONING_PROMPT = PromptTemplate(
+    input_variables=["candidates", "constraints", "user_preferences"],
+    template="""You are selecting a World Cup squad from a list of candidate players. You must respect ALL hard constraints and optional budget if given.
+
+CONSTRAINTS:
+{constraints}
+
+USER PREFERENCES (apply when possible):
+{user_preferences}
+
+CANDIDATE PLAYERS (each line is one player with stats):
+{candidates}
+
+TASK:
+1. Select exactly the maximum number of players allowed, meeting minimums for each position (GK, DEF, MID, FWD).
+2. If a total wage budget is specified, the sum of selected players' wage_eur must not exceed it.
+3. For each selected player, write a 1-2 sentence justification that references their actual stats (e.g. pace, overall, defending).
+4. List a few notable excluded players and briefly why they were cut.
+5. State any tradeoffs (e.g. "sacrificed depth in midfield to stay under budget").
+
+OUTPUT FORMAT (use this exact structure so it can be parsed):
+---SELECTED---
+[For each player list: short_name | primary_position | overall | wage_eur | justification text]
+---EXCLUDED---
+[short_name | reason]
+---TOTAL_WAGE---
+[sum of selected wage_eur]
+---FORMATION_NOTES---
+[2-3 sentences on positional balance and tradeoffs]
+""",
+)
+
+SYNTHESIS_PROMPT = PromptTemplate(
+    input_variables=["squad", "constraints_applied"],
+    template="""Generate a formatted squad report from the following structured squad data.
+
+CONSTRAINTS THAT WERE APPLIED:
+{constraints_applied}
+
+SQUAD DATA:
+{squad}
+
+Include in your report:
+1. A clear squad table grouped by position (GK, DEF, MID, FWD) with player name, position, overall rating, key stat, and a short justification.
+2. A 2-3 sentence "Squad philosophy" summary.
+3. If a budget was applied: total wage and budget summary.
+4. A short list of notable excluded players and why they were cut.
+5. This exact disclaimer: "This is an educational tool, not professional sports analytics advice. Selections are based on FIFA video game ratings and do not reflect real-world performance."
+6. Data source: "Player data from EA Sports FC 24 complete player dataset (Kaggle, Stefano Leone)."
+
+Write in clear, readable markdown where appropriate.
+""",
+)
+
+# ReAct agent prompt: must include tools, tool_names, agent_scratchpad, input; optional chat_history for memory
+REACT_AGENT_PROMPT = PromptTemplate(
+    input_variables=["chat_history", "input", "agent_scratchpad", "tools", "tool_names"],
+    template="""You are a World Cup Squad Builder assistant. You help users build an optimal 23-player squad from FIFA/EA Sports FC 24 player data.
+
+You have access to these tools:
+- data_ingestion_tool: Load and clean FIFA player data (call once at start if user wants to build a squad).
+- retrieval_or_filter_tool: Find players matching criteria (e.g. "fast defenders", "young midfielders"). Input is a natural language query.
+- reasoning_or_aggregation_tool: Select the final squad from a shortlist applying roster constraints. Input is a JSON string with "shortlist", "constraints", and "user_preferences".
+- report_generation_tool: Generate the final formatted squad report. Input is a JSON string with "squad" and "constraints_applied".
+
+Typical flow: 1) Ingest data if needed, 2) Retrieve players with retrieval_or_filter_tool, 3) Build squad with reasoning_or_aggregation_tool, 4) Generate report with report_generation_tool. Remember user preferences (budget, style) across turns.
+
+Use this format:
+Thought: your reasoning
+Action: the tool name
+Action Input: the tool input
+Observation: result from the tool
+... (repeat as needed)
+Thought: I now know the final answer
+Final Answer: the squad report or answer for the user
+
+Previous chat history (remember user preferences):
+{chat_history}
+
+User input: {input}
+
+Tools:
+{tools}
+
+Tool names: {tool_names}
+
+Thought: {agent_scratchpad}""",
+)

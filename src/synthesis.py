@@ -1,109 +1,62 @@
 """
 Stage 4: Synthesis and report generation for the World Cup Squad Builder.
-
-Owner:
-    Person B
-
-Purpose:
-    - Take the final structured squad produced by the reasoning stage.
-    - Use an LLM to generate a human-readable, well-formatted squad report.
-    - Summarize squad philosophy, budget usage, notable exclusions, and
-      clearly state limitations and data sources.
-
-Dependencies (for eventual implementation):
-    - `langchain_openai.ChatOpenAI`
-    - `src.prompts.SYNTHESIS_PROMPT`
-
-Key report elements:
-    - Readable squad table grouped by position (GK, DEF, MID, FWD).
-    - Per-player justification summary.
-    - Squad philosophy description (2–3 sentences).
-    - Budget summary (if applicable).
-    - List of notable excluded players and reasons.
-    - Responsible AI disclaimer:
-        "This is an educational tool, not professional sports analytics advice.
-         Selections are based on FIFA video game ratings and do not reflect
-         real-world performance."
-    - Data source citation (Kaggle dataset by Stefano Leone).
 """
 
+import json
 from typing import List, Dict, Any
 
+from langchain_openai import ChatOpenAI
 
-def generate_report(squad: Dict[str, Any], constraints_applied: Dict[str, Any]) -> str:
-    """
-    Generate a formatted natural-language squad report from the selected squad.
-
-    Responsibilities:
-        - Prepare the input to `SYNTHESIS_PROMPT`, including:
-            * `squad`: full structured dictionary from `build_squad`, with
-              selected and excluded players, total wage, and formation notes.
-            * `constraints_applied`: the constraints dict used during reasoning.
-        - Optionally call `format_squad_table` to pre-compute a human-readable table
-          representation of the selected players.
-        - Invoke a `ChatOpenAI` model with `SYNTHESIS_PROMPT` (e.g., via
-          the pipe operator `SYNTHESIS_PROMPT | llm`) to produce a cohesive report.
-        - Ensure the generated text:
-            * Includes a squad table, squad philosophy, budget summary,
-              notable exclusions, limitations disclaimer, and data source citation.
-        - Return the final report string (e.g., suitable for display in Gradio).
-
-    Parameters:
-        squad:
-            Structured squad dictionary as returned by `build_squad`, expected to
-            contain:
-                - "selected": list of player dicts with "justification"
-                - "excluded": list of notable cuts with "reason"
-                - "total_wage": float
-                - "formation_notes": str
-        constraints_applied:
-            The constraints dictionary used to construct the squad, e.g., showing
-            max squad size, positional minimums, and any budget.
-
-    Returns:
-        A formatted string containing the full squad report for end users.
-
-    Notes for implementation:
-        - The LLM prompt should explicitly instruct inclusion of the responsible
-          AI disclaimer and data source citation.
-        - Ensure output is cleanly formatted (e.g., markdown table or aligned text)
-          for readability in the Gradio UI and notebook.
-    """
-    pass
+from src.prompts import SYNTHESIS_PROMPT
 
 
 def format_squad_table(selected_players: List[Dict[str, Any]]) -> str:
-    """
-    Format a list of selected players into a readable text table.
+    """Format selected players as a text table grouped by position."""
+    order = ["GK", "DEF", "MID", "FWD"]
+    by_pos: Dict[str, List[Dict[str, Any]]] = {p: [] for p in order}
+    for player in selected_players:
+        pos = (player.get("primary_position") or "FWD").upper()
+        if pos not in by_pos:
+            by_pos[pos] = []
+        by_pos[pos].append(player)
 
-    Responsibilities:
-        - Group players by their `primary_position` (GK, DEF, MID, FWD).
-        - For each player, include at least:
-            * Name
-            * Position
-            * Overall rating
-            * One or more key stats (e.g., Pace for forwards, Defending for defenders)
-            * Short justification snippet or reference to the justification field.
-        - Return the table as a string (e.g., markdown or aligned plain text).
+    lines = []
+    for pos in order:
+        players = by_pos.get(pos, [])
+        if not players:
+            continue
+        lines.append(f"\n### {pos}")
+        for p in players:
+            name = p.get("short_name", "?")
+            ovr = p.get("overall", "?")
+            pace = p.get("pace", "?")
+            defend = p.get("defending", "?")
+            shoot = p.get("shooting", "?")
+            wage = p.get("wage_eur", "?")
+            just = (p.get("justification") or "")[:80]
+            if pos == "GK":
+                stat = f"Overall {ovr}"
+            elif pos == "DEF":
+                stat = f"Def {defend}"
+            else:
+                stat = f"Pace {pace} Shoot {shoot}"
+            lines.append(f"  {name} | {pos} | {ovr} | {stat} | Wage {wage} | {just}")
+    return "\n".join(lines) if lines else "No players"
 
-    Parameters:
-        selected_players:
-            A list of player dictionaries drawn from the "selected" list in
-            the squad dictionary, each containing at least:
-                - "short_name"
-                - "primary_position"
-                - "overall"
-                - Additional stats used for display.
 
-    Returns:
-        A string representing the formatted squad table, to be embedded
-        within the full report generated by `generate_report`.
+def generate_report(squad: Dict[str, Any], constraints_applied: Dict[str, Any]) -> str:
+    """Generate formatted squad report using LLM and SYNTHESIS_PROMPT."""
+    selected = squad.get("selected") or []
+    table = format_squad_table(selected)
+    squad_text = (
+        f"Squad table:\n{table}\n\n"
+        f"Total wage: {squad.get('total_wage', 0)}\n"
+        f"Formation notes: {squad.get('formation_notes', '')}\n"
+        f"Excluded: {squad.get('excluded', [])}"
+    )
+    constraints_text = json.dumps(constraints_applied, indent=2)
 
-    Notes for implementation:
-        - This helper function may be called directly within `generate_report`
-          (either before or during prompt construction) to provide the LLM
-          with an initial formatted view of the squad or to be used as-is in
-          the final output.
-    """
-    pass
-
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.3)
+    chain = SYNTHESIS_PROMPT | llm
+    resp = chain.invoke({"squad": squad_text, "constraints_applied": constraints_text})
+    return resp.content if hasattr(resp, "content") else str(resp)

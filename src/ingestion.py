@@ -12,199 +12,130 @@ Purpose:
       (GK, DEF, MID, FWD).
     - Cache the cleaned data to a reproducible CSV in `data/processed/players_cleaned.csv`.
     - Convert cleaned rows into LangChain `Document` objects for downstream retrieval.
-
-Dependencies (to be used in implementation):
-    - pandas as pd
-    - langchain_community.document_loaders.CSVLoader (if needed for alternative loading)
-    - langchain_core.documents.Document
-
-Data expectations:
-    - Raw CSV path: `data/raw/male_players.csv`
-    - Must filter to rows where `fifa_version == 24`.
-    - Must handle and drop rows with null values in key columns:
-        overall, pace, shooting, passing, dribbling, defending, physic,
-        player_positions, wage_eur
-    - Must normalize `player_positions` into a single `primary_position` in {GK, DEF, MID, FWD}
-      using the mapping:
-        * GK: GK
-        * DEF: CB, LB, RB, LWB, RWB
-        * MID: CM, CDM, CAM, LM, RM, LCM, RCM
-        * FWD: ST, LW, RW, CF, LF, RF
-
-Selected columns for the cleaned DataFrame (minimum):
-    - short_name, long_name, player_positions (original), primary_position
-    - overall, potential, pace, shooting, passing, dribbling, defending, physic
-    - value_eur, wage_eur, age
-    - nationality_name, club_name
-    - skill_moves, weak_foot, skill_fk_accuracy
-    - movement_sprint_speed, movement_acceleration
-    - preferred_foot, work_rate, international_reputation
-    - height_cm, weight_kg
-
-Document conversion expectations:
-    - `page_content` should be a natural-language description, e.g.:
-      "Kylian Mbappé is a 24-year-old FWD from France. Overall: 91, Pace: 97, Shooting: 89, ..."
-    - `metadata` should include all structured numeric/categorical fields for potential filtering.
-
-Entry point:
-    - `load_and_clean_data()` should orchestrate:
-        load_raw_data -> clean_data -> cache_processed_data -> dataframe_to_documents
-      and return the list of `Document` objects.
 """
 
+import os
 from typing import List
 
 import pandas as pd
 from langchain_core.documents import Document
 
 
+# Position mapping: raw comma-separated positions -> primary_position
+POSITION_TO_CATEGORY = {
+    "GK": "GK",
+    "CB": "DEF", "LB": "DEF", "RB": "DEF", "LWB": "DEF", "RWB": "DEF",
+    "CM": "MID", "CDM": "MID", "CAM": "MID", "LM": "MID", "RM": "MID", "LCM": "MID", "RCM": "MID",
+    "ST": "FWD", "LW": "FWD", "RW": "FWD", "CF": "FWD", "LF": "FWD", "RF": "FWD",
+}
+
+REQUIRED_COLUMNS = [
+    "overall", "pace", "shooting", "passing", "dribbling", "defending", "physic",
+    "player_positions", "wage_eur",
+]
+
+SELECT_COLUMNS = [
+    "short_name", "long_name", "player_positions", "primary_position",
+    "overall", "potential", "pace", "shooting", "passing", "dribbling", "defending", "physic",
+    "value_eur", "wage_eur", "age", "nationality_name", "club_name",
+    "skill_moves", "weak_foot", "skill_fk_accuracy",
+    "movement_sprint_speed", "movement_acceleration",
+    "preferred_foot", "work_rate", "international_reputation",
+    "height_cm", "weight_kg",
+]
+
+
 def load_raw_data(filepath: str = "data/raw/male_players.csv") -> pd.DataFrame:
-    """
-    Load the raw FIFA player CSV into a pandas DataFrame.
-
-    Responsibilities:
-        - Read the CSV located at `filepath` using pandas.
-        - Filter rows to only those where `fifa_version == 24` to ensure
-          a single, up-to-date snapshot of each player.
-        - Return the filtered DataFrame without performing any additional cleaning.
-
-    Parameters:
-        filepath:
-            Path to the raw male players CSV file. Defaults to
-            "data/raw/male_players.csv" per project convention.
-
-    Returns:
-        A pandas DataFrame containing only rows where `fifa_version == 24`.
-
-    Notes for implementation:
-        - Use `pd.read_csv(filepath)` to load the file.
-        - Apply the filter `df["fifa_version"] == 24`.
-        - Do not modify column names or types in this function.
-    """
-    pass
+    """Load the raw FIFA player CSV and filter to fifa_version == 24."""
+    if not os.path.isfile(filepath):
+        raise FileNotFoundError(
+            f"Raw data not found at {filepath}. "
+            "Download 'EA Sports FC 24 complete player dataset' from Kaggle and place male_players.csv in data/raw/."
+        )
+    df = pd.read_csv(filepath)
+    if "fifa_version" in df.columns:
+        df = df[df["fifa_version"] == 24].copy()
+    return df
 
 
 def clean_data(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Clean and normalize the raw FIFA player DataFrame.
+    """Clean and normalize the raw FIFA player DataFrame."""
+    # Drop rows with nulls in critical columns
+    for col in REQUIRED_COLUMNS:
+        if col not in df.columns:
+            continue
+        df = df.dropna(subset=[col])
 
-    Responsibilities:
-        - Drop rows with nulls in critical columns:
-            overall, pace, shooting, passing, dribbling,
-            defending, physic, player_positions, wage_eur.
-        - Normalize the `player_positions` column (e.g., "ST, LW") into a single
-          `primary_position` column in {GK, DEF, MID, FWD} using the mapping:
-            * GK: GK
-            * DEF: CB, LB, RB, LWB, RWB
-            * MID: CM, CDM, CAM, LM, RM, LCM, RCM
-            * FWD: ST, LW, RW, CF, LF, RF
-        - Select and keep only the columns relevant for the pipeline:
-            short_name, long_name, player_positions (original), primary_position,
-            overall, potential, pace, shooting, passing, dribbling, defending, physic,
-            value_eur, wage_eur, age, nationality_name, club_name,
-            skill_moves, weak_foot, skill_fk_accuracy,
-            movement_sprint_speed, movement_acceleration,
-            preferred_foot, work_rate, international_reputation,
-            height_cm, weight_kg.
+    # Normalize player_positions to primary_position (first position in list)
+    def map_primary_position(positions_str):
+        if pd.isna(positions_str) or not str(positions_str).strip():
+            return None
+        first_pos = str(positions_str).split(",")[0].strip().upper()
+        return POSITION_TO_CATEGORY.get(first_pos)
 
-    Parameters:
-        df:
-            Raw DataFrame as returned by `load_raw_data`, already filtered to fifa_version == 24.
+    df["primary_position"] = df["player_positions"].apply(map_primary_position)
+    df = df.dropna(subset=["primary_position"])
 
-    Returns:
-        A cleaned and column-reduced pandas DataFrame ready for caching and conversion
-        to LangChain `Document` objects.
-
-    Notes for implementation:
-        - Carefully handle string parsing for `player_positions` to determine the primary role.
-        - Ensure `primary_position` is always one of "GK", "DEF", "MID", or "FWD".
-        - Preserve row count consistency with expectations and log or comment any major drops.
-    """
-    pass
+    # Select only columns we need (that exist)
+    available = [c for c in SELECT_COLUMNS if c in df.columns]
+    df = df[available].copy()
+    return df
 
 
 def cache_processed_data(df: pd.DataFrame, filepath: str = "data/processed/players_cleaned.csv") -> None:
-    """
-    Cache the cleaned player DataFrame to disk for reproducibility.
-
-    Responsibilities:
-        - Ensure the parent directory for `filepath` exists (e.g., `data/processed/`).
-        - Save the cleaned DataFrame to CSV at `filepath` without the index.
-        - Overwrite or versioning policy can be documented here if needed.
-
-    Parameters:
-        df:
-            Cleaned DataFrame as returned by `clean_data`.
-        filepath:
-            Destination CSV path where the processed data should be cached.
-            Defaults to "data/processed/players_cleaned.csv".
-
-    Returns:
-        None. This function is used for its side effect of writing a CSV file.
-
-    Notes for implementation:
-        - Use `os.makedirs` with `exist_ok=True` to ensure directories exist.
-        - Use `df.to_csv(filepath, index=False)` for saving.
-    """
-    pass
+    """Save cleaned DataFrame to CSV; create directory if needed."""
+    os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
+    df.to_csv(filepath, index=False)
 
 
 def dataframe_to_documents(df: pd.DataFrame) -> List[Document]:
-    """
-    Convert the cleaned DataFrame into a list of LangChain `Document` objects.
-
-    Responsibilities:
-        - For each row in `df`, construct:
-            * `page_content`: a human-readable summary sentence or paragraph
-              capturing key attributes (name, age, nationality, club, overall rating,
-              core stats like pace/shooting/etc., wage, skill moves, weak foot, etc.).
-            * `metadata`: a dictionary containing all relevant structured fields
-              (e.g., overall, pace, wage_eur, nationality_name, club_name, etc.).
-        - Return the list of `Document` instances.
-
-    Parameters:
-        df:
-            Cleaned DataFrame as returned by `clean_data`, containing all columns
-            required to build meaningful descriptions and metadata.
-
-    Returns:
-        A list of `Document` objects (from `langchain_core.documents`) suitable
-        for embedding and retrieval in later stages.
-
-    Notes for implementation:
-        - Ensure that numeric values are appropriately converted to Python types
-          before placing in `metadata`.
-        - The natural language template for `page_content` should be consistent
-          across players to help the retriever.
-        - Example (for guidance only, not hardcoded):
-          "Kylian Mbappé is a 24-year-old FWD from France. Overall: 91, Pace: 97, ..."
-    """
-    pass
+    """Convert each row to a LangChain Document with natural-language page_content and metadata."""
+    docs = []
+    for _, row in df.iterrows():
+        name = row.get("short_name", row.get("long_name", "Unknown"))
+        age = row.get("age", "")
+        pos = row.get("primary_position", "")
+        nation = row.get("nationality_name", "")
+        overall = row.get("overall", "")
+        pace = row.get("pace", "")
+        shooting = row.get("shooting", "")
+        passing = row.get("passing", "")
+        dribbling = row.get("dribbling", "")
+        defending = row.get("defending", "")
+        physic = row.get("physic", "")
+        wage = row.get("wage_eur", "")
+        club = row.get("club_name", "")
+        skills = row.get("skill_moves", "")
+        weak = row.get("weak_foot", "")
+        sprint = row.get("movement_sprint_speed", "")
+        page_content = (
+            f"{name} is a {age}-year-old {pos} from {nation}. "
+            f"Overall: {overall}, Pace: {pace}, Shooting: {shooting}, Passing: {passing}, "
+            f"Dribbling: {dribbling}, Defending: {defending}, Physical: {physic}. "
+            f"Wage: {wage} EUR. Club: {club}. "
+            f"Skills: {skills} star skill moves, {weak} star weak foot. Sprint Speed: {sprint}."
+        )
+        metadata = {k: (int(v) if isinstance(v, (float,)) and k not in ("value_eur", "wage_eur") and pd.notna(v) else v) for k, v in row.items()}
+        # Ensure numeric types where appropriate
+        for key in ["overall", "potential", "pace", "shooting", "passing", "dribbling", "defending", "physic", "age", "skill_moves", "weak_foot", "height_cm", "weight_kg", "international_reputation"]:
+            if key in metadata and metadata[key] is not None and pd.notna(metadata[key]):
+                try:
+                    metadata[key] = int(float(metadata[key]))
+                except (ValueError, TypeError):
+                    pass
+        for key in ["value_eur", "wage_eur", "skill_fk_accuracy", "movement_sprint_speed", "movement_acceleration"]:
+            if key in metadata and metadata[key] is not None and pd.notna(metadata[key]):
+                try:
+                    metadata[key] = float(metadata[key])
+                except (ValueError, TypeError):
+                    pass
+        docs.append(Document(page_content=page_content, metadata=metadata))
+    return docs
 
 
 def load_and_clean_data() -> List[Document]:
-    """
-    Orchestrate the entire data ingestion pipeline and return player documents.
-
-    Responsibilities:
-        - Call `load_raw_data()` to read the raw CSV and filter by `fifa_version == 24`.
-        - Call `clean_data()` to drop incomplete rows and normalize positions.
-        - Call `cache_processed_data()` to persist the cleaned DataFrame to
-          `data/processed/players_cleaned.csv` for reproducibility.
-        - Call `dataframe_to_documents()` to convert cleaned rows to `Document` objects.
-        - Return the final list of `Document` instances as the single entry point
-          for other stages (retrieval, reasoning, tools, agent, UI).
-
-    Parameters:
-        None.
-
-    Returns:
-        A list of LangChain `Document` objects representing cleaned player data.
-
-    Notes for implementation:
-        - This function should be the only public entry point used by downstream modules.
-        - Handle exceptions or logging as appropriate for robustness (e.g., missing files),
-          but keep the signature simple for LangChain tool wrapping.
-    """
-    pass
-
+    """Orchestrate: load_raw_data -> clean_data -> cache_processed_data -> dataframe_to_documents."""
+    df = load_raw_data()
+    df = clean_data(df)
+    cache_processed_data(df)
+    return dataframe_to_documents(df)
