@@ -49,24 +49,35 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup_event():
     """Load FAISS index at startup to avoid per-request loading."""
-    global _vector_store, _retriever
+    global _vector_store, _retriever, _player_lookup
     if os.path.isdir(FAISS_INDEX_PATH):
         try:
             logger.info("Loading FAISS index from disk at startup...")
             _vector_store = retrieval.load_vector_store(FAISS_INDEX_PATH)
             _retriever = retrieval.get_retriever(_vector_store, k=50)
             logger.info("FAISS index loaded successfully.")
+            
+            # Build lightweight player lookup from FAISS metadata (no CSV loading)
+            logger.info("Building player lookup cache...")
+            if hasattr(_vector_store, 'docstore') and hasattr(_vector_store.docstore, '_dict'):
+                for doc in _vector_store.docstore._dict.values():
+                    meta = doc.metadata if hasattr(doc, 'metadata') else {}
+                    name = str(meta.get('short_name', '')).strip().upper()
+                    if name:
+                        _player_lookup[name] = meta
+            logger.info("Player lookup cache built with %d entries.", len(_player_lookup))
         except Exception as e:
             logger.error("Failed to load FAISS index: %s", e)
     else:
         logger.warning("No FAISS index found at %s. Will build on first request.", FAISS_INDEX_PATH)
 
 # ── Module-level cache ──────────────────────────────────────────────────────
-_documents: List[Any] = []
+_documents: List[Any] = []  # Only for initial FAISS build, then cleared
 _vector_store: Any = None
 _retriever: Any = None
 _last_shortlist: List[Dict[str, Any]] = []
 _last_squad: Dict[str, Any] = {}
+_player_lookup: Dict[str, Dict[str, Any]] = {}  # Lightweight name→metadata cache
 
 # Persisted FAISS index path (avoid re-embedding 16k docs on every server start)
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -307,7 +318,7 @@ def ensure_documents_loaded() -> None:
 
 def ensure_data_loaded() -> None:
     """Ensure vector store is loaded. Only load CSV if FAISS index doesn't exist."""
-    global _documents, _vector_store, _retriever
+    global _documents, _vector_store, _retriever, _player_lookup
     
     if _vector_store is not None:
         logger.debug("Using cached vector store.")
@@ -320,17 +331,36 @@ def ensure_data_loaded() -> None:
             _vector_store = retrieval.load_vector_store(FAISS_INDEX_PATH)
             _retriever = retrieval.get_retriever(_vector_store, k=50)
             logger.info("Vector store loaded from disk.")
+            
+            # Build player lookup
+            if hasattr(_vector_store, 'docstore') and hasattr(_vector_store.docstore, '_dict'):
+                for doc in _vector_store.docstore._dict.values():
+                    meta = doc.metadata if hasattr(doc, 'metadata') else {}
+                    name = str(meta.get('short_name', '')).strip().upper()
+                    if name:
+                        _player_lookup[name] = meta
+            logger.info("Player lookup cache built with %d entries.", len(_player_lookup))
             return
         except Exception as e:
             logger.warning("Failed to load FAISS index: %s. Rebuilding...", e)
     
-    # Only load documents if we need to rebuild FAISS
-    ensure_documents_loaded()
+    # Only load documents if we need to rebuild FAISS (should be rare)
+    logger.info("Loading and cleaning player data from CSV...")
+    _documents = ingestion.load_and_clean_data()
+    logger.info("Loaded %d player documents", len(_documents))
+    
     logger.info("Building FAISS vector store (first run or rebuild)...")
     _vector_store = retrieval.create_vector_store(_documents)
     retrieval.save_vector_store(_vector_store, FAISS_INDEX_PATH)
     _retriever = retrieval.get_retriever(_vector_store, k=50)
     logger.info("Vector store built and saved to %s", FAISS_INDEX_PATH)
+    
+    # Build player lookup
+    for doc in _documents:
+        meta = doc.metadata if hasattr(doc, 'metadata') else {}
+        name = str(meta.get('short_name', '')).strip().upper()
+        if name:
+            _player_lookup[name] = meta
     
     # Clear documents from memory after FAISS is built
     _documents = []
@@ -808,19 +838,22 @@ def _build_replacement_reason(player: Dict[str, Any], position: str) -> str:
 
 @app.get("/api/search-players")
 def search_players(position: str = "", query: str = "", limit: int = 20):
-    """Search the player database by position and/or name. No OpenAI key needed."""
-    try:
-        ensure_documents_loaded()
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    """Search the player database by position and/or name using lightweight lookup."""
+    global _player_lookup
+    
+    # Use player lookup instead of loading full documents
+    if not _player_lookup:
+        try:
+            ensure_data_loaded()  # Will populate _player_lookup
+        except FileNotFoundError as e:
+            raise HTTPException(status_code=500, detail=str(e))
 
     position = position.strip().upper()
     query_lower = query.strip().lower()
     compatible = SLOT_COMPATIBLE_POSITIONS.get(position, [position]) if position else []
 
     results = []
-    for doc in _documents:
-        meta = doc.metadata if hasattr(doc, "metadata") else {}
+    for meta in _player_lookup.values():
         if position:
             positions = _get_specific_positions(meta)
             if not (any(pp in compatible for pp in positions) or _category_match(meta, position)):
