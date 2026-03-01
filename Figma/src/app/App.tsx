@@ -8,7 +8,7 @@ import { RightPanel } from './components/RightPanel';
 import { ProgressIndicator } from './components/ProgressIndicator';
 import { PlayerSelectionModal } from './components/PlayerSelectionModal';
 import { Info } from 'lucide-react';
-import { buildSquad as buildSquadAPI, sendChat as sendChatAPI } from './api';
+import { buildSquad as buildSquadAPI, sendChat as sendChatAPI, getReplacementCandidates } from './api';
 
 type SelectedLocation = { source: 'pitch' | 'bench' | 'reserve'; index: number } | null;
 type SelectionModalState = { source: 'pitch' | 'bench' | 'reserve'; index: number; position: string } | null;
@@ -48,6 +48,9 @@ export default function App() {
 
   // Player selection modal
   const [selectionModal, setSelectionModal] = useState<SelectionModalState>(null);
+  // Fetched AI replacement candidates (so AI Picks tab is always available when replacing)
+  const [replaceModalAlternatives, setReplaceModalAlternatives] = useState<Player[] | null>(null);
+  const [replaceModalAlternativesLoading, setReplaceModalAlternativesLoading] = useState(false);
 
   // Derive all players from pitch + bench + reserves
   const allPlayers: (Player | null)[] = [
@@ -189,6 +192,11 @@ export default function App() {
       setReserveSlots(result.reserveSlots);
       setStrategyReasoning(result.strategyReasoning);
 
+      // Reflect AI-inferred tactics in the left panel so the user can see and optionally adjust
+      if (result.formation != null) setFormation(result.formation as Formation);
+      if (result.buildUpStyle != null) setBuildUpStyle(result.buildUpStyle as BuildUpStyle);
+      if (result.defensiveApproach != null) setDefensiveApproach(result.defensiveApproach as DefensiveApproach);
+
       setPipelineStage('Complete');
       setIsBuilding(false);
 
@@ -242,14 +250,36 @@ export default function App() {
   };
 
   // Open the selection modal for the currently selected player's slot (replace flow)
-  const handleOpenReplaceModal = () => {
+  const handleOpenReplaceModal = async () => {
     if (!selectedLocation) return;
     const { source, index } = selectedLocation;
     let position = '';
-    if (source === 'pitch') position = squadSlots[index]?.position || '';
-    else if (source === 'bench') position = benchSlots[index]?.position || 'SUB';
-    else if (source === 'reserve') position = reserveSlots[index]?.position || 'RES';
+    let currentPlayer: Player | null = null;
+    if (source === 'pitch') {
+      position = squadSlots[index]?.position || '';
+      currentPlayer = squadSlots[index]?.player ?? null;
+    } else if (source === 'bench') {
+      position = benchSlots[index]?.position || 'SUB';
+      currentPlayer = benchSlots[index]?.player ?? null;
+    } else {
+      position = reserveSlots[index]?.position || 'RES';
+      currentPlayer = reserveSlots[index]?.player ?? null;
+    }
     setSelectionModal({ source, index, position });
+    setReplaceModalAlternatives(null);
+    if (currentPlayer) {
+      setReplaceModalAlternativesLoading(true);
+      try {
+        const currentSquadIds = allPlayers.filter((p): p is Player => p !== null).map(p => p.id);
+        const candidates = await getReplacementCandidates(position, currentPlayer.id, currentSquadIds);
+        setReplaceModalAlternatives(candidates.map(c => c.player));
+      } catch (err) {
+        console.error('Failed to fetch replacement candidates:', err);
+        setReplaceModalAlternatives([]);
+      } finally {
+        setReplaceModalAlternativesLoading(false);
+      }
+    }
   };
 
   // Handle player selected from modal
@@ -259,7 +289,7 @@ export default function App() {
 
     if (source === 'pitch') {
       setSquadSlots(prev => prev.map((slot, i) =>
-        i === index ? { ...slot, player, alternatives: undefined } : slot
+        i === index ? { ...slot, player } : slot
       ));
     } else if (source === 'bench') {
       setBenchSlots(prev => {
@@ -278,6 +308,7 @@ export default function App() {
     }
 
     setSelectionModal(null);
+    setReplaceModalAlternatives(null);
   };
 
   // Toggle lock on selected player
@@ -307,6 +338,16 @@ export default function App() {
     if (source === 'pitch') setSquadSlots(prev => replaceInSlot(prev, index));
     if (source === 'bench') setBenchSlots(prev => replaceInSlot(prev, index));
     if (source === 'reserve') setReserveSlots(prev => replaceInSlot(prev, index));
+  };
+
+  // Alternatives to show in the selection modal: when replacing a player, use freshly fetched list (so AI Picks is always available)
+  const getAlternativesForModal = (): Player[] | undefined => {
+    if (!selectionModal) return undefined;
+    const { source, index } = selectionModal;
+    const slot = source === 'pitch' ? squadSlots[index] : source === 'bench' ? benchSlots[index] : reserveSlots[index];
+    const hasPlayer = !!slot?.player;
+    if (hasPlayer && replaceModalAlternatives !== null) return replaceModalAlternatives;
+    return slot?.alternatives;
   };
 
   // Export squad
@@ -492,18 +533,11 @@ export default function App() {
       <PlayerSelectionModal
         isOpen={selectionModal !== null}
         position={selectionModal?.position || ''}
-        alternatives={
-          selectionModal?.source === 'pitch'
-            ? squadSlots[selectionModal.index]?.alternatives
-            : selectionModal?.source === 'bench'
-              ? benchSlots[selectionModal.index]?.alternatives
-              : selectionModal?.source === 'reserve'
-                ? reserveSlots[selectionModal.index]?.alternatives
-                : undefined
-        }
+        alternatives={getAlternativesForModal()}
+        alternativesLoading={replaceModalAlternativesLoading}
         existingPlayerIds={allPlayers.filter((p): p is Player => p !== null).map(p => p.id)}
         onSelect={handleModalSelect}
-        onClose={() => setSelectionModal(null)}
+        onClose={() => { setSelectionModal(null); setReplaceModalAlternatives(null); }}
       />
     </div>
   );

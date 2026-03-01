@@ -38,6 +38,30 @@ def _shortlist_to_candidates_text(shortlist: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _parse_num(s: str, default: float = 0.0) -> float:
+    """Parse a number from a string that may be '123.45' or 'wage_eur=23000.0'. Returns default on failure."""
+    if not s:
+        return default
+    s = str(s).strip()
+    try:
+        return float(s)
+    except ValueError:
+        pass
+    # Extract first number (integer or decimal) from string
+    m = re.search(r"[\d.]+", s)
+    if m:
+        try:
+            return float(m.group(0))
+        except ValueError:
+            pass
+    return default
+
+
+def _parse_int(s: str, default: int = 0) -> int:
+    """Parse an integer from a string that may be '85' or 'overall=85'. Returns default on failure."""
+    return int(_parse_num(s, float(default)))
+
+
 def parse_llm_squad_output(llm_response: str) -> Dict[str, Any]:
     """Parse section-based LLM output into structured squad dict."""
     selected = []
@@ -69,8 +93,8 @@ def parse_llm_squad_output(llm_response: str) -> Dict[str, Any]:
             selected.append({
                 "short_name": parts[0],
                 "primary_position": parts[1] if len(parts) > 1 else "",
-                "overall": int(parts[2]) if str(parts[2]).isdigit() else parts[2],
-                "wage_eur": float(parts[3]) if len(parts) > 3 and re.search(r"[\d.]", str(parts[3])) else 0,
+                "overall": _parse_int(parts[2], 0) if len(parts) > 2 else 0,
+                "wage_eur": _parse_num(parts[3], 0.0) if len(parts) > 3 else 0.0,
                 "justification": "|".join(parts[4:]) if len(parts) > 4 else "",
             })
         elif len(parts) >= 1:

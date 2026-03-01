@@ -10,6 +10,8 @@ interface PlayerSelectionModalProps {
   onSelect: (player: Player) => void;
   onClose: () => void;
   alternatives?: Player[];
+  /** When true, show AI Picks tab with loading state (so the tab is always visible when replacing) */
+  alternativesLoading?: boolean;
   existingPlayerIds?: string[];
 }
 
@@ -19,13 +21,15 @@ export function PlayerSelectionModal({
   onSelect,
   onClose,
   alternatives,
+  alternativesLoading = false,
   existingPlayerIds = [],
 }: PlayerSelectionModalProps) {
+  const showAIPicksTab = alternativesLoading || (alternatives && alternatives.length > 0);
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Player[]>([]);
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<'search' | 'alternatives'>(
-    alternatives && alternatives.length > 0 ? 'alternatives' : 'search'
+    showAIPicksTab ? 'alternatives' : 'search'
   );
   const debounceTimer = useRef<ReturnType<typeof setTimeout>>();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -46,10 +50,10 @@ export function PlayerSelectionModal({
 
   useEffect(() => {
     if (!isOpen) return;
-    setActiveTab(alternatives && alternatives.length > 0 ? 'alternatives' : 'search');
+    setActiveTab(showAIPicksTab ? 'alternatives' : 'search');
     setQuery('');
     setResults([]);
-  }, [isOpen, alternatives]);
+  }, [isOpen, showAIPicksTab]);
 
   useEffect(() => {
     if (activeTab !== 'search') return;
@@ -69,6 +73,7 @@ export function PlayerSelectionModal({
   const displayPlayers = activeTab === 'alternatives'
     ? (alternatives || []).filter(p => !existingPlayerIds.includes(p.id))
     : results;
+  const showingAIPicksLoading = activeTab === 'alternatives' && alternativesLoading;
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center">
@@ -88,14 +93,14 @@ export function PlayerSelectionModal({
 
         {/* Tabs */}
         <div className="flex p-1.5 mx-4 mt-3 bg-[#0f0f1e] rounded-lg">
-          {alternatives && alternatives.length > 0 && (
+          {showAIPicksTab && (
             <button
               onClick={() => setActiveTab('alternatives')}
               className={`flex-1 py-1.5 rounded-md text-sm font-medium transition-colors ${
                 activeTab === 'alternatives' ? 'bg-[#4ade80] text-[#1a1a2e]' : 'text-gray-400 hover:text-white'
               }`}
             >
-              AI Picks ({alternatives.length})
+              AI Picks {alternativesLoading ? '(…)' : alternatives?.length != null ? `(${alternatives.length})` : ''}
             </button>
           )}
           <button
@@ -127,6 +132,13 @@ export function PlayerSelectionModal({
 
         {/* Player list */}
         <div className="flex-1 overflow-y-auto p-4 space-y-2 custom-scrollbar min-h-0">
+          {showingAIPicksLoading && (
+            <div className="flex items-center justify-center py-8">
+              <div className="w-6 h-6 border-2 border-[#4ade80] border-t-transparent rounded-full animate-spin" />
+              <span className="ml-3 text-sm text-gray-400">Loading AI Picks...</span>
+            </div>
+          )}
+
           {loading && activeTab === 'search' && (
             <div className="flex items-center justify-center py-8">
               <div className="w-6 h-6 border-2 border-[#4ade80] border-t-transparent rounded-full animate-spin" />
@@ -134,7 +146,7 @@ export function PlayerSelectionModal({
             </div>
           )}
 
-          {!loading && displayPlayers.length === 0 && (
+          {!showingAIPicksLoading && !loading && displayPlayers.length === 0 && (
             <div className="text-center py-8 text-sm text-gray-500">
               {activeTab === 'search'
                 ? query ? 'No players found.' : 'Type to search for players...'
@@ -143,15 +155,16 @@ export function PlayerSelectionModal({
             </div>
           )}
 
-          {displayPlayers.map((player, idx) => (
-            <PlayerRow
-              key={player.id + idx}
-              player={player}
-              isAIPick={activeTab === 'alternatives'}
-              rank={activeTab === 'alternatives' ? idx + 1 : undefined}
-              onSelect={() => onSelect(player)}
-            />
-          ))}
+          {!showingAIPicksLoading &&
+            displayPlayers.map((player, idx) => (
+              <PlayerRow
+                key={player.id + idx}
+                player={player}
+                isAIPick={activeTab === 'alternatives'}
+                rank={activeTab === 'alternatives' ? idx + 1 : undefined}
+                onSelect={() => onSelect(player)}
+              />
+            ))}
         </div>
       </div>
     </div>

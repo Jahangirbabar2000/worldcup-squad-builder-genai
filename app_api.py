@@ -26,8 +26,15 @@ logger = logging.getLogger("squad_api")
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage
 
 from src import ingestion, retrieval, reasoning
+
+# Valid tactic options (must match frontend types)
+VALID_FORMATIONS = ("4-3-3", "4-4-2", "3-5-2", "4-2-3-1", "3-4-3")
+VALID_BUILD_UP = ("Balanced", "Counter-Attack", "Short Passing")
+VALID_DEFENSIVE = ("Balanced", "Deep Block", "High Press", "Aggressive")
 
 app = FastAPI(title="World Cup Squad Builder API")
 
@@ -532,6 +539,50 @@ def _run_pipeline(
     }
 
 
+def _infer_tactics_from_message(message: str) -> Tuple[str, str, str]:
+    """
+    Use the LLM to infer formation, build-up style, and defensive approach
+    from the user's natural language (e.g. "I want a defensive team").
+    Returns (formation, build_up_style, defensive_approach).
+    """
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
+    prompt = """You are a football tactics expert. Given the user's message about the kind of team they want, choose the best formation, build-up style, and defensive approach.
+
+User message: "{message}"
+
+Respond with ONLY a single JSON object, no other text, with exactly these keys:
+- "formation": one of 4-3-3, 4-4-2, 3-5-2, 4-2-3-1, 3-4-3
+- "buildUpStyle": one of Balanced, Counter-Attack, Short Passing
+- "defensiveApproach": one of Balanced, Deep Block, High Press, Aggressive
+
+Interpret the user's intent: e.g. "defensive team" -> consider 3-5-2 or 4-4-2, Deep Block; "attacking" -> 4-3-3 or 3-4-3, High Press; "possession" -> Short Passing; "counter" -> Counter-Attack. Default to Balanced when unclear."""
+
+    try:
+        resp = llm.invoke([HumanMessage(content=prompt.format(message=message or "balanced squad"))])
+        content = (resp.content or "").strip()
+        # Extract JSON if wrapped in markdown
+        if "```" in content:
+            start = content.find("{")
+            end = content.rfind("}") + 1
+            if start >= 0 and end > start:
+                content = content[start:end]
+        data = json.loads(content)
+        formation = str(data.get("formation", "4-3-3")).strip()
+        build_up = str(data.get("buildUpStyle", "Balanced")).strip()
+        defensive = str(data.get("defensiveApproach", "Balanced")).strip()
+        if formation not in VALID_FORMATIONS:
+            formation = "4-3-3"
+        if build_up not in VALID_BUILD_UP:
+            build_up = "Balanced"
+        if defensive not in VALID_DEFENSIVE:
+            defensive = "Balanced"
+        logger.info("Inferred tactics: formation=%s buildUp=%s defensive=%s", formation, build_up, defensive)
+        return formation, build_up, defensive
+    except Exception as e:
+        logger.warning("Tactics inference failed, using defaults: %s", e)
+        return "4-3-3", "Balanced", "Balanced"
+
+
 # ── Endpoints ──────────────────────────────────────────────────────────────
 
 
@@ -578,15 +629,21 @@ def chat_endpoint(request: ChatRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
     try:
+        # AI infers formation, build-up, and defensive style from the user's message
+        formation, build_up_style, defensive_approach = _infer_tactics_from_message(request.message)
         result = _run_pipeline(
             query=request.message,
-            formation=request.formation,
-            build_up_style=request.buildUpStyle,
-            defensive_approach=request.defensiveApproach,
+            formation=formation,
+            build_up_style=build_up_style,
+            defensive_approach=defensive_approach,
             budget=request.budget,
             budget_enabled=request.budgetEnabled,
             cons=request.constraints,
         )
+        # Return inferred settings so the frontend can update the left panel
+        result["formation"] = formation
+        result["buildUpStyle"] = build_up_style
+        result["defensiveApproach"] = defensive_approach
         logger.info("POST /api/chat success")
         return result
     except HTTPException:
