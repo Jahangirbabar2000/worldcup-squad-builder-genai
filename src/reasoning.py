@@ -3,12 +3,15 @@ Stage 3: Reasoning, constraint solving, and squad construction for the World Cup
 """
 
 import json
+import logging
 import re
 from typing import List, Dict, Any
 
 from langchain_openai import ChatOpenAI
 
 from src.prompts import REASONING_PROMPT
+
+logger = logging.getLogger("squad_api")
 
 
 def _shortlist_to_candidates_text(shortlist: List[Dict[str, Any]]) -> str:
@@ -143,14 +146,19 @@ def build_squad(
     candidates_text = _shortlist_to_candidates_text(shortlist)
 
     for attempt in range(3):
-        chain = REASONING_PROMPT | llm
-        resp = chain.invoke({
-            "candidates": candidates_text,
-            "constraints": constraints_text,
-            "user_preferences": user_preferences or "None specified.",
-        })
-        content = resp.content if hasattr(resp, "content") else str(resp)
-        squad = parse_llm_squad_output(content)
+        logger.info("LLM reasoning attempt %d/3", attempt + 1)
+        try:
+            chain = REASONING_PROMPT | llm
+            resp = chain.invoke({
+                "candidates": candidates_text,
+                "constraints": constraints_text,
+                "user_preferences": user_preferences or "None specified.",
+            })
+            content = resp.content if hasattr(resp, "content") else str(resp)
+            squad = parse_llm_squad_output(content)
+        except Exception as e:
+            logger.exception("LLM invoke or parse failed: %s", e)
+            raise
         # Enrich selected with full player data from shortlist by name
         by_name = {str(p.get("short_name", "")).strip().upper(): p for p in shortlist}
         for s in squad["selected"]:

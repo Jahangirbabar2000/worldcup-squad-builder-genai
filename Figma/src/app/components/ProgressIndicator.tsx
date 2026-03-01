@@ -17,17 +17,17 @@ export function ProgressIndicator({ currentStage, isRunning }: ProgressIndicator
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center w-full">
         {stages.map((stage, index) => {
           const isActive = index === currentIndex && isRunning;
           const isComplete = index < currentIndex || currentStage === 'Complete';
 
           return (
-            <div key={stage} className="flex items-center flex-1">
-              <div className="flex flex-col items-center flex-1">
+            <div key={stage} className="flex items-center flex-1 min-w-0">
+              <div className="flex flex-col items-center flex-1 min-w-0">
                 <div
                   className={`
-                    w-8 h-8 rounded-full flex items-center justify-center text-xs font-medium
+                    w-8 h-8 rounded-full flex items-center justify-center text-xs font-medium shrink-0
                     transition-all duration-300
                     ${isActive ? 'bg-[#4ade80] text-[#1a1a2e] animate-pulse' : ''}
                     ${isComplete ? 'bg-[#4ade80] text-[#1a1a2e]' : ''}
@@ -42,17 +42,18 @@ export function ProgressIndicator({ currentStage, isRunning }: ProgressIndicator
                     index + 1
                   )}
                 </div>
-                <div className="text-xs mt-2 text-center text-gray-300">
+                <div className="text-xs mt-2 text-center text-gray-300 truncate w-full px-0.5">
                   {stage}
                 </div>
               </div>
               {index < stages.length - 1 && (
-                <div className="flex-1 h-0.5 -mx-2 relative top-[-12px]">
+                <div className="flex-1 min-w-[8px] h-0.5 mx-1 relative top-[-12px] self-start mt-4">
                   <div
                     className={`
-                      h-full transition-all duration-300
+                      w-full h-full min-h-[2px] transition-all duration-300 rounded
                       ${index < currentIndex ? 'bg-[#4ade80]' : 'bg-gray-700'}
                     `}
+                    style={{ width: '100%' }}
                   />
                 </div>
               )}

@@ -4,14 +4,24 @@ Exposes structured JSON endpoints for the React frontend while using
 the same LangChain / RAG pipeline (ingestion, retrieval, reasoning).
 """
 
+import logging
 import os
 import hashlib
 import json
+import traceback
 from typing import List, Dict, Any, Optional, Tuple
 
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Configure logging: level INFO to stdout so you can see pipeline steps
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger("squad_api")
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -199,9 +209,11 @@ def _get_specific_positions(p: Dict[str, Any]) -> List[str]:
 
 
 def transform_player(player_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Transform backend player metadata to the frontend Player shape."""
+    """Transform backend player metadata to the frontend Player shape. Tolerates missing keys."""
+    if not isinstance(player_data, dict):
+        player_data = {}
     positions = _get_specific_positions(player_data)
-    first_position = positions[0] if positions else "ST"
+    first_position = positions[0] if positions else str(player_data.get("primary_position") or "ST")
     value_eur = _safe_float(player_data.get("value_eur", 0))
 
     return {
@@ -242,19 +254,28 @@ def ensure_documents_loaded() -> None:
     """Load only documents (CSV parsing). No OpenAI key needed."""
     global _documents
     if not _documents:
+        logger.info("Loading and cleaning player data from CSV...")
         _documents = ingestion.load_and_clean_data()
+        logger.info("Loaded %d player documents", len(_documents))
+    else:
+        logger.debug("Using cached documents (%d)", len(_documents))
 
 
 def ensure_data_loaded() -> None:
     global _documents, _vector_store, _retriever
     ensure_documents_loaded()
     if _vector_store is None:
+        logger.info("Building FAISS vector store and retriever...")
         _vector_store = retrieval.create_vector_store(_documents)
         _retriever = retrieval.get_retriever(_vector_store, k=50)
+        logger.info("Vector store ready.")
+    else:
+        logger.debug("Using cached vector store.")
 
 
 def retrieve_diverse_shortlist(query: str) -> List[Dict[str, Any]]:
     """Retrieve a broad shortlist covering all positions."""
+    logger.info("Retrieving shortlist for query: %s", query[:80] if query else "(empty)")
     ensure_data_loaded()
 
     docs = retrieval.retrieve_players(query, _retriever)
@@ -277,6 +298,7 @@ def retrieve_diverse_shortlist(query: str) -> List[Dict[str, Any]]:
         if name and name not in seen:
             seen.add(name)
             shortlist.append(meta)
+    logger.info("Shortlist size: %d players", len(shortlist))
     return shortlist
 
 
@@ -284,6 +306,7 @@ def assign_to_formation(
     selected_players: List[Dict[str, Any]], formation: str
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Place players into pitch slots (11), bench (7), reserves (up to 5)."""
+    selected_players = [p for p in selected_players if isinstance(p, dict)]
     template = FORMATION_TEMPLATES.get(formation, FORMATION_TEMPLATES["4-3-3"])
     available = list(range(len(selected_players)))
     slot_player: List[Optional[int]] = [None] * len(template)
@@ -348,6 +371,28 @@ def assign_to_formation(
     ]
 
     return pitch_slots, bench_slots, reserve_slots
+
+
+def _enrich_selected_from_shortlist(
+    selected: List[Dict[str, Any]], shortlist: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """Ensure every selected player has full metadata (player_positions, value_eur, etc.) by merging from shortlist."""
+    by_name = {str(p.get("short_name", "")).strip().upper(): p for p in shortlist}
+    by_name_long = {str(p.get("long_name", "")).strip().upper(): p for p in shortlist}
+    enriched = []
+    for s in selected:
+        key = str(s.get("short_name", "")).strip().upper()
+        full = by_name.get(key) or by_name_long.get(key)
+        if full:
+            merged = {**full}
+            for k, v in s.items():
+                if v is not None and v != "":
+                    merged[k] = v
+            enriched.append(merged)
+        else:
+            # Keep as-is; transform_player will use .get() defaults
+            enriched.append(s)
+    return enriched
 
 
 # ── Request / Response Models ───────────────────────────────────────────────
@@ -423,11 +468,26 @@ def _run_pipeline(
             "Prefer lower-value players when skill levels are comparable."
         )
 
-    squad = reasoning.build_squad(shortlist, constraints_dict, user_prefs)
+    logger.info("Calling reasoning.build_squad (LLM)...")
+    try:
+        squad = reasoning.build_squad(shortlist, constraints_dict, user_prefs)
+    except Exception as e:
+        logger.exception("reasoning.build_squad failed: %s", e)
+        raise
     _last_squad = squad
 
     selected = squad.get("selected", [])
-    pitch_slots, bench_slots, reserve_slots = assign_to_formation(selected, formation)
+    logger.info("LLM returned %d selected players", len(selected))
+    if not selected:
+        logger.warning("No players selected by LLM; using top 23 from shortlist by overall.")
+        selected = sorted(shortlist, key=lambda p: _safe_int(p.get("overall")), reverse=True)[:23]
+    selected = _enrich_selected_from_shortlist(selected, shortlist)
+    logger.info("Assigning %d players to formation %s", len(selected), formation)
+    try:
+        pitch_slots, bench_slots, reserve_slots = assign_to_formation(selected, formation)
+    except Exception as e:
+        logger.exception("assign_to_formation failed: %s", e)
+        raise
 
     all_players = (
         [s["player"] for s in pitch_slots if s["player"]]
@@ -447,6 +507,7 @@ def _run_pipeline(
 
     # Compute top-5 alternatives per pitch slot from the full shortlist
     selected_ids = {s["player"]["id"] for s in pitch_slots if s["player"]}
+    logger.info("Building alternatives for %d pitch slots", len(pitch_slots))
     for slot in pitch_slots:
         pos = slot["position"]
         compatible = SLOT_COMPATIBLE_POSITIONS.get(pos, [pos])
@@ -476,13 +537,15 @@ def _run_pipeline(
 
 @app.post("/api/build-squad")
 def build_squad_endpoint(request: BuildSquadRequest):
+    logger.info("POST /api/build-squad formation=%s prompt=%s", request.formation, (request.prompt or "")[:60])
     try:
         ensure_data_loaded()
     except FileNotFoundError as e:
+        logger.error("Data not found: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
     try:
-        return _run_pipeline(
+        result = _run_pipeline(
             query=request.prompt or "Build me a balanced World Cup squad",
             formation=request.formation,
             build_up_style=request.buildUpStyle,
@@ -491,19 +554,31 @@ def build_squad_endpoint(request: BuildSquadRequest):
             budget_enabled=request.budgetEnabled,
             cons=request.constraints,
         )
+        logger.info("POST /api/build-squad success")
+        return result
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Pipeline error: {e}")
+        logger.exception("Pipeline error: %s", e)
+        tb = traceback.format_exc()
+        logger.error("Traceback:\n%s", tb)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Pipeline error: {type(e).__name__}: {str(e)}",
+        )
 
 
 @app.post("/api/chat")
 def chat_endpoint(request: ChatRequest):
+    logger.info("POST /api/chat message=%s", (request.message or "")[:60])
     try:
         ensure_data_loaded()
     except FileNotFoundError as e:
+        logger.error("Data not found: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
     try:
-        return _run_pipeline(
+        result = _run_pipeline(
             query=request.message,
             formation=request.formation,
             build_up_style=request.buildUpStyle,
@@ -512,8 +587,17 @@ def chat_endpoint(request: ChatRequest):
             budget_enabled=request.budgetEnabled,
             cons=request.constraints,
         )
+        logger.info("POST /api/chat success")
+        return result
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Pipeline error: {e}")
+        logger.exception("Pipeline error: %s", e)
+        logger.error("Traceback:\n%s", traceback.format_exc())
+        raise HTTPException(
+            status_code=500,
+            detail=f"Pipeline error: {type(e).__name__}: {str(e)}",
+        )
 
 
 @app.post("/api/replace-player")
