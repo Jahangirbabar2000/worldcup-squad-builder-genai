@@ -602,14 +602,14 @@ def _run_pipeline(
     return result
 
 
-def _infer_tactics_from_message(message: str) -> Tuple[str, str, str]:
+def _infer_tactics_from_message(message: str) -> Tuple[str, str, str, bool, float]:
     """
-    Use the LLM to infer formation, build-up style, and defensive approach
-    from the user's natural language (e.g. "I want a defensive team").
-    Returns (formation, build_up_style, defensive_approach).
+    Use the LLM to infer formation, build-up style, defensive approach, and budget
+    from the user's natural language (e.g. "I want a defensive team under 200 million").
+    Returns (formation, build_up_style, defensive_approach, budget_enabled, budget_millions).
     """
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
-    prompt = """You are a football tactics expert. Given the user's message about the kind of team they want, choose the best formation, build-up style, and defensive approach.
+    prompt = """You are a football tactics expert. Given the user's message about the kind of team they want, choose the best formation, build-up style, defensive approach, and any budget constraint.
 
 User message: "{message}"
 
@@ -617,13 +617,14 @@ Respond with ONLY a single JSON object, no other text, with exactly these keys:
 - "formation": one of 4-3-3, 4-4-2, 3-5-2, 4-2-3-1, 3-4-3
 - "buildUpStyle": one of Balanced, Counter-Attack, Short Passing
 - "defensiveApproach": one of Balanced, Deep Block, High Press, Aggressive
+- "budgetEnabled": true only if the user explicitly asked for a budget or spending limit (e.g. "under 200 million", "max 150M", "budget of 300"); otherwise false
+- "budget": number in millions EUR (e.g. 200 for "under 200 million"). Use 0 if no budget mentioned. Reasonable range 50-500.
 
-Interpret the user's intent: e.g. "defensive team" -> consider 3-5-2 or 4-4-2, Deep Block; "attacking" -> 4-3-3 or 3-4-3, High Press; "possession" -> Short Passing; "counter" -> Counter-Attack. Default to Balanced when unclear."""
+Interpret tactics: "defensive team" -> 3-5-2 or 4-4-2, Deep Block; "attacking" -> 4-3-3 or 3-4-3, High Press; "possession" -> Short Passing. If the user mentions a budget, set budgetEnabled true and budget to that value in millions."""
 
     try:
         resp = llm.invoke([HumanMessage(content=prompt.format(message=message or "balanced squad"))])
         content = (resp.content or "").strip()
-        # Extract JSON if wrapped in markdown
         if "```" in content:
             start = content.find("{")
             end = content.rfind("}") + 1
@@ -633,17 +634,29 @@ Interpret the user's intent: e.g. "defensive team" -> consider 3-5-2 or 4-4-2, D
         formation = str(data.get("formation", "4-3-3")).strip()
         build_up = str(data.get("buildUpStyle", "Balanced")).strip()
         defensive = str(data.get("defensiveApproach", "Balanced")).strip()
+        budget_enabled = bool(data.get("budgetEnabled", False))
+        try:
+            budget = float(data.get("budget", 0) or 0)
+        except (TypeError, ValueError):
+            budget = 0.0
+        if budget_enabled and (budget <= 0 or budget > 2000):
+            budget = 200.0
+        if not budget_enabled:
+            budget = 0.0
         if formation not in VALID_FORMATIONS:
             formation = "4-3-3"
         if build_up not in VALID_BUILD_UP:
             build_up = "Balanced"
         if defensive not in VALID_DEFENSIVE:
             defensive = "Balanced"
-        logger.info("Inferred tactics: formation=%s buildUp=%s defensive=%s", formation, build_up, defensive)
-        return formation, build_up, defensive
+        logger.info(
+            "Inferred tactics: formation=%s buildUp=%s defensive=%s budgetEnabled=%s budget=%s",
+            formation, build_up, defensive, budget_enabled, budget,
+        )
+        return formation, build_up, defensive, budget_enabled, budget
     except Exception as e:
         logger.warning("Tactics inference failed, using defaults: %s", e)
-        return "4-3-3", "Balanced", "Balanced"
+        return "4-3-3", "Balanced", "Balanced", False, 0.0
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────
@@ -692,21 +705,25 @@ def chat_endpoint(request: ChatRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
     try:
-        # AI infers formation, build-up, and defensive style from the user's message
-        formation, build_up_style, defensive_approach = _infer_tactics_from_message(request.message)
+        # AI infers formation, build-up, defensive style, and budget from the user's message
+        formation, build_up_style, defensive_approach, budget_enabled, budget = _infer_tactics_from_message(
+            request.message
+        )
         result = _run_pipeline(
             query=request.message,
             formation=formation,
             build_up_style=build_up_style,
             defensive_approach=defensive_approach,
-            budget=request.budget,
-            budget_enabled=request.budgetEnabled,
+            budget=budget,
+            budget_enabled=budget_enabled,
             cons=request.constraints,
         )
         # Return inferred settings so the frontend can update the left panel
         result["formation"] = formation
         result["buildUpStyle"] = build_up_style
         result["defensiveApproach"] = defensive_approach
+        result["budgetEnabled"] = budget_enabled
+        result["budget"] = budget
         logger.info("POST /api/chat success")
         return result
     except HTTPException:

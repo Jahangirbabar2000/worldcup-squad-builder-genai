@@ -19,10 +19,12 @@ export interface BuildSquadResponse {
   strategyReasoning: string;
   aiMessage: string;
   excluded: Array<{ short_name: string; reason: string }>;
-  /** Set by chat endpoint: AI-inferred formation/build-up/defensive so the panel can reflect them */
+  /** Set by chat endpoint: AI-inferred settings so the panel can reflect them */
   formation?: string;
   buildUpStyle?: string;
   defensiveApproach?: string;
+  budgetEnabled?: boolean;
+  budget?: number;
 }
 
 export interface ReplacementCandidate {

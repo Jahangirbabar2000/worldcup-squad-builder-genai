@@ -192,10 +192,12 @@ export default function App() {
       setReserveSlots(result.reserveSlots);
       setStrategyReasoning(result.strategyReasoning);
 
-      // Reflect AI-inferred tactics in the left panel so the user can see and optionally adjust
+      // Reflect AI-inferred tactics and budget in the left panel so the user can see and optionally adjust
       if (result.formation != null) setFormation(result.formation as Formation);
       if (result.buildUpStyle != null) setBuildUpStyle(result.buildUpStyle as BuildUpStyle);
       if (result.defensiveApproach != null) setDefensiveApproach(result.defensiveApproach as DefensiveApproach);
+      if (result.budgetEnabled != null) setBudgetEnabled(result.budgetEnabled);
+      if (result.budget != null) setBudget(Math.min(500, Math.max(0, Math.round(result.budget))));
 
       setPipelineStage('Complete');
       setIsBuilding(false);
