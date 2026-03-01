@@ -9,9 +9,10 @@ interface PitchViewProps {
   reserveSlots: SquadSlot[];
   onBenchClick?: (index: number) => void;
   onReserveClick?: (index: number) => void;
+  onEmptySlotClick?: (source: 'pitch' | 'bench' | 'reserve', index: number, position: string) => void;
 }
 
-export function PitchView({ slots, formation, onPlayerClick, benchSlots, reserveSlots, onBenchClick, onReserveClick }: PitchViewProps) {
+export function PitchView({ slots, formation, onPlayerClick, benchSlots, reserveSlots, onBenchClick, onReserveClick, onEmptySlotClick }: PitchViewProps) {
   return (
     <div className="space-y-4">
       {/* Pitch */}
@@ -57,7 +58,14 @@ export function PitchView({ slots, formation, onPlayerClick, benchSlots, reserve
               <PlayerCard
                 player={slot.player}
                 position={slot.position}
-                onClick={() => onPlayerClick(index)}
+                alternativeCount={slot.alternatives?.length || 0}
+                onClick={() => {
+                  if (slot.player) {
+                    onPlayerClick(index);
+                  } else if (onEmptySlotClick) {
+                    onEmptySlotClick('pitch', index, slot.position);
+                  }
+                }}
               />
             </div>
           ))}
@@ -75,16 +83,22 @@ export function PitchView({ slots, formation, onPlayerClick, benchSlots, reserve
                 player={slot.player}
                 position={slot.position}
                 size="small"
-                onClick={slot.player && onBenchClick ? () => onBenchClick(i) : undefined}
+                onClick={
+                  slot.player && onBenchClick
+                    ? () => onBenchClick(i)
+                    : onEmptySlotClick
+                      ? () => onEmptySlotClick('bench', i, slot.position || 'SUB')
+                      : undefined
+                }
               />
             ))}
-            {/* Fill remaining empty bench slots if fewer than 7 */}
             {benchSlots.length < 7 && Array.from({ length: 7 - benchSlots.length }).map((_, i) => (
               <PlayerCard
                 key={`bench-empty-${i}`}
                 player={null}
                 position="SUB"
                 size="small"
+                onClick={onEmptySlotClick ? () => onEmptySlotClick('bench', benchSlots.length + i, 'SUB') : undefined}
               />
             ))}
           </div>
@@ -100,16 +114,22 @@ export function PitchView({ slots, formation, onPlayerClick, benchSlots, reserve
                 player={slot.player}
                 position={slot.position}
                 size="small"
-                onClick={slot.player && onReserveClick ? () => onReserveClick(i) : undefined}
+                onClick={
+                  slot.player && onReserveClick
+                    ? () => onReserveClick(i)
+                    : onEmptySlotClick
+                      ? () => onEmptySlotClick('reserve', i, slot.position || 'RES')
+                      : undefined
+                }
               />
             ))}
-            {/* Fill remaining empty reserve slots if fewer than 5 */}
             {reserveSlots.length < 5 && Array.from({ length: 5 - reserveSlots.length }).map((_, i) => (
               <PlayerCard
                 key={`reserve-empty-${i}`}
                 player={null}
                 position="RES"
                 size="small"
+                onClick={onEmptySlotClick ? () => onEmptySlotClick('reserve', reserveSlots.length + i, 'RES') : undefined}
               />
             ))}
           </div>

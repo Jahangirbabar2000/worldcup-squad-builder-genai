@@ -1,14 +1,17 @@
 import { useState } from 'react';
 import { Formation, BuildUpStyle, DefensiveApproach, SquadSlot, PipelineStage, SquadConstraints, ChatMessage, Player } from './types/squad';
-import { formationTemplates, buildSquadWithAI, buildBenchAndReserves, getAIConfirmation } from './data/mockData';
+import { formationTemplates } from './data/mockData';
 import { calculateAverageStats, calculateSquadRating, calculateTotalPrice, countPositions } from './utils/squadCalculations';
 import { InputPanel } from './components/InputPanel';
 import { PitchView } from './components/PitchView';
 import { RightPanel } from './components/RightPanel';
 import { ProgressIndicator } from './components/ProgressIndicator';
+import { PlayerSelectionModal } from './components/PlayerSelectionModal';
 import { Info } from 'lucide-react';
+import { buildSquad as buildSquadAPI, sendChat as sendChatAPI } from './api';
 
 type SelectedLocation = { source: 'pitch' | 'bench' | 'reserve'; index: number } | null;
+type SelectionModalState = { source: 'pitch' | 'bench' | 'reserve'; index: number; position: string } | null;
 
 export default function App() {
   const [prompt, setPrompt] = useState('');
@@ -39,6 +42,12 @@ export default function App() {
 
   // Right panel tab
   const [rightPanelTab, setRightPanelTab] = useState<'overview' | 'details'>('overview');
+
+  // Strategy reasoning from backend
+  const [strategyReasoning, setStrategyReasoning] = useState<string>('');
+
+  // Player selection modal
+  const [selectionModal, setSelectionModal] = useState<SelectionModalState>(null);
 
   // Derive all players from pitch + bench + reserves
   const allPlayers: (Player | null)[] = [
@@ -88,61 +97,63 @@ export default function App() {
     setConstraints(prev => ({ ...prev, [field]: value }));
   };
 
-  // Helper: build full squad and populate bench/reserves
-  const populateFullSquad = (pitchSlots: SquadSlot[]) => {
-    setSquadSlots(pitchSlots);
-    const { bench, reserves } = buildBenchAndReserves(pitchSlots, constraints);
-    setBenchSlots(bench);
-    setReserveSlots(reserves);
-    return { pitchSlots, bench, reserves };
-  };
-
   // Build squad with AI
   const handleBuildSquad = async () => {
     setIsBuilding(true);
     setSelectedLocation(null);
     const startTime = Date.now();
 
-    const stages: PipelineStage[] = ['Retrieving', 'Filtering', 'Constraining', 'Justifying'];
+    const animateProgress = async () => {
+      const stages: PipelineStage[] = ['Retrieving', 'Filtering', 'Constraining', 'Justifying'];
+      for (const stage of stages) {
+        setPipelineStage(stage);
+        await new Promise(resolve => setTimeout(resolve, 1500));
+      }
+    };
 
-    for (const stage of stages) {
-      setPipelineStage(stage);
-      await new Promise(resolve => setTimeout(resolve, 600));
+    const apiCall = buildSquadAPI({
+      prompt: prompt || 'Build me a balanced World Cup squad',
+      formation,
+      buildUpStyle,
+      defensiveApproach,
+      budget,
+      budgetEnabled,
+      constraints,
+    });
+
+    try {
+      const [result] = await Promise.all([apiCall, animateProgress()]);
+
+      setSquadSlots(result.pitchSlots);
+      setBenchSlots(result.benchSlots);
+      setReserveSlots(result.reserveSlots);
+      setStrategyReasoning(result.strategyReasoning);
+
+      setPipelineStage('Complete');
+      const endTime = Date.now();
+      setLastRunTime((endTime - startTime) / 1000);
+      setIsBuilding(false);
+
+      if (!hasBuiltOnce) {
+        const userMsg: ChatMessage = {
+          id: `msg-${Date.now()}`,
+          role: 'user',
+          text: prompt || 'Build me a squad',
+        };
+        const aiMsg: ChatMessage = {
+          id: `msg-${Date.now() + 1}`,
+          role: 'ai',
+          text: result.aiMessage,
+        };
+        setChatMessages([userMsg, aiMsg]);
+      }
+
+      setHasBuiltOnce(true);
+    } catch (err) {
+      console.error('Build squad error:', err);
+      setPipelineStage('Complete');
+      setIsBuilding(false);
     }
-
-    const newPitch = buildSquadWithAI(formation, budget, prompt, constraints);
-    const { bench, reserves } = populateFullSquad(newPitch);
-
-    setPipelineStage('Complete');
-    const endTime = Date.now();
-    setLastRunTime((endTime - startTime) / 1000);
-    setIsBuilding(false);
-
-    // Compute total for confirmation message
-    const allNewPlayers = [
-      ...newPitch.map(s => s.player),
-      ...bench.map(s => s.player),
-      ...reserves.map(s => s.player),
-    ].filter((p): p is Player => p !== null);
-    const newTotal = allNewPlayers.reduce((s, p) => s + p.price, 0);
-    const newCount = allNewPlayers.length;
-
-    // Add initial chat messages on first build
-    if (!hasBuiltOnce) {
-      const userMsg: ChatMessage = {
-        id: `msg-${Date.now()}`,
-        role: 'user',
-        text: prompt || 'Build me a squad'
-      };
-      const aiMsg: ChatMessage = {
-        id: `msg-${Date.now() + 1}`,
-        role: 'ai',
-        text: getAIConfirmation(formation, buildUpStyle, budget, budgetEnabled, newCount, newTotal)
-      };
-      setChatMessages([userMsg, aiMsg]);
-    }
-
-    setHasBuiltOnce(true);
   };
 
   // Handle send chat message
@@ -150,44 +161,67 @@ export default function App() {
     const userMsg: ChatMessage = {
       id: `msg-${Date.now()}`,
       role: 'user',
-      text: message
+      text: message,
     };
     setChatMessages(prev => [...prev, userMsg]);
 
-    // Simulate AI response with a rebuild
     setIsBuilding(true);
-    const stages: PipelineStage[] = ['Retrieving', 'Filtering', 'Constraining', 'Justifying'];
-    for (const stage of stages) {
-      setPipelineStage(stage);
-      await new Promise(resolve => setTimeout(resolve, 400));
-    }
+    setSelectedLocation(null);
 
-    const newPitch = buildSquadWithAI(formation, budget, message, constraints);
-    const { bench, reserves } = populateFullSquad(newPitch);
-    setPipelineStage('Complete');
-    setIsBuilding(false);
-
-    const allNewPlayers = [
-      ...newPitch.map(s => s.player),
-      ...bench.map(s => s.player),
-      ...reserves.map(s => s.player),
-    ].filter((p): p is Player => p !== null);
-    const newTotal = allNewPlayers.reduce((s, p) => s + p.price, 0);
-    const newCount = allNewPlayers.length;
-
-    const aiMsg: ChatMessage = {
-      id: `msg-${Date.now() + 1}`,
-      role: 'ai',
-      text: getAIConfirmation(formation, buildUpStyle, budget, budgetEnabled, newCount, newTotal)
+    const animateProgress = async () => {
+      const stages: PipelineStage[] = ['Retrieving', 'Filtering', 'Constraining', 'Justifying'];
+      for (const stage of stages) {
+        setPipelineStage(stage);
+        await new Promise(resolve => setTimeout(resolve, 1200));
+      }
     };
-    setChatMessages(prev => [...prev, aiMsg]);
+
+    const apiCall = sendChatAPI(
+      message, formation, buildUpStyle, defensiveApproach,
+      budget, budgetEnabled, constraints,
+    );
+
+    try {
+      const [result] = await Promise.all([apiCall, animateProgress()]);
+
+      setSquadSlots(result.pitchSlots);
+      setBenchSlots(result.benchSlots);
+      setReserveSlots(result.reserveSlots);
+      setStrategyReasoning(result.strategyReasoning);
+
+      setPipelineStage('Complete');
+      setIsBuilding(false);
+
+      const aiMsg: ChatMessage = {
+        id: `msg-${Date.now() + 1}`,
+        role: 'ai',
+        text: result.aiMessage,
+      };
+      setChatMessages(prev => [...prev, aiMsg]);
+    } catch (err) {
+      console.error('Chat error:', err);
+      setPipelineStage('Complete');
+      setIsBuilding(false);
+
+      const errorMsg: ChatMessage = {
+        id: `msg-${Date.now() + 1}`,
+        role: 'ai',
+        text: 'Sorry, something went wrong. Please try again.',
+      };
+      setChatMessages(prev => [...prev, errorMsg]);
+    }
   };
 
   // Handle player click from pitch
   const handlePlayerClick = (index: number) => {
-    if (squadSlots[index].player) {
-      setSelectedLocation({ source: 'pitch', index });
-      setRightPanelTab('details');
+    const slot = squadSlots[index];
+    if (slot?.player) {
+      if (slot.alternatives && slot.alternatives.length > 0) {
+        setSelectionModal({ source: 'pitch', index, position: slot.position });
+      } else {
+        setSelectedLocation({ source: 'pitch', index });
+        setRightPanelTab('details');
+      }
     }
   };
 
@@ -205,6 +239,39 @@ export default function App() {
       setSelectedLocation({ source: 'reserve', index });
       setRightPanelTab('details');
     }
+  };
+
+  // Handle empty slot click (opens selection modal)
+  const handleEmptySlotClick = (source: 'pitch' | 'bench' | 'reserve', index: number, position: string) => {
+    setSelectionModal({ source, index, position });
+  };
+
+  // Handle player selected from modal
+  const handleModalSelect = (player: Player) => {
+    if (!selectionModal) return;
+    const { source, index } = selectionModal;
+
+    if (source === 'pitch') {
+      setSquadSlots(prev => prev.map((slot, i) =>
+        i === index ? { ...slot, player, alternatives: undefined } : slot
+      ));
+    } else if (source === 'bench') {
+      setBenchSlots(prev => {
+        if (index < prev.length) {
+          return prev.map((slot, i) => i === index ? { ...slot, player } : slot);
+        }
+        return [...prev, { position: player.position, player, x: 0, y: 0 }];
+      });
+    } else if (source === 'reserve') {
+      setReserveSlots(prev => {
+        if (index < prev.length) {
+          return prev.map((slot, i) => i === index ? { ...slot, player } : slot);
+        }
+        return [...prev, { position: player.position, player, x: 0, y: 0 }];
+      });
+    }
+
+    setSelectionModal(null);
   };
 
   // Toggle lock on selected player
@@ -256,10 +323,12 @@ export default function App() {
     setBenchSlots([]);
     setReserveSlots([]);
     setSelectedLocation(null);
+    setSelectionModal(null);
     setPrompt('');
     setHasBuiltOnce(false);
     setChatMessages([]);
     setRightPanelTab('overview');
+    setStrategyReasoning('');
   };
 
   return (
@@ -340,6 +409,7 @@ export default function App() {
                 reserveSlots={reserveSlots}
                 onBenchClick={handleBenchClick}
                 onReserveClick={handleReserveClick}
+                onEmptySlotClick={handleEmptySlotClick}
               />
             </div>
 
@@ -364,6 +434,7 @@ export default function App() {
                 onReplacePlayer={handleReplacePlayer}
                 activeTab={rightPanelTab}
                 onTabChange={setRightPanelTab}
+                strategyReasoning={strategyReasoning}
               />
             </div>
           </div>
@@ -409,6 +480,20 @@ export default function App() {
           </div>
         </div>
       </div>
+
+      {/* Player selection modal */}
+      <PlayerSelectionModal
+        isOpen={selectionModal !== null}
+        position={selectionModal?.position || ''}
+        alternatives={
+          selectionModal?.source === 'pitch'
+            ? squadSlots[selectionModal.index]?.alternatives
+            : undefined
+        }
+        existingPlayerIds={allPlayers.filter((p): p is Player => p !== null).map(p => p.id)}
+        onSelect={handleModalSelect}
+        onClose={() => setSelectionModal(null)}
+      />
     </div>
   );
 }

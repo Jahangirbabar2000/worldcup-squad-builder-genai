@@ -211,5 +211,8 @@ data/processed/
 data/cache/
 .env
 
+# Node
+node_modules/
+
 # macOS
 .DS_Store

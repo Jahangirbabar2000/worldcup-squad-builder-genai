@@ -28,8 +28,9 @@ def _shortlist_to_candidates_text(shortlist: List[Dict[str, Any]]) -> str:
         age = p.get("age", "?")
         nation = p.get("nationality_name", "?")
         club = p.get("club_name", "?")
+        value = p.get("value_eur", "?")
         lines.append(
-            f"{name} | {pos} | overall={ovr} | wage_eur={wage} | pace={pace} shooting={shoot} passing={pass_} dribbling={drib} defending={def_} physic={phys} | age={age} | {nation} | {club}"
+            f"{name} | {pos} | overall={ovr} | wage_eur={wage} value_eur={value} | pace={pace} shooting={shoot} passing={pass_} dribbling={drib} defending={def_} physic={phys} | age={age} | {nation} | {club}"
         )
     return "\n".join(lines)
 

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Player, PlayerStats, Formation, BuildUpStyle, DefensiveApproach, ReplacementCandidate } from '../types/squad';
+import { Player, PlayerStats, Formation, BuildUpStyle, DefensiveApproach } from '../types/squad';
 import { getStatColor, calculateAverageStats, calculateAverageHeight } from '../utils/squadCalculations';
-import { getAIReasoning, getSquadStrategyReasoning, getReplacementCandidates } from '../data/mockData';
+import { getReplacementCandidates as getReplacementCandidatesAPI, ReplacementCandidate } from '../api';
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, ResponsiveContainer } from 'recharts';
 import { ChevronDown, ChevronUp, ArrowLeft } from 'lucide-react';
 
@@ -27,6 +27,8 @@ interface RightPanelProps {
   // Active tab control
   activeTab: 'overview' | 'details';
   onTabChange: (tab: 'overview' | 'details') => void;
+  // AI-generated strategy reasoning from the backend
+  strategyReasoning?: string;
 }
 
 export function RightPanel({
@@ -46,6 +48,7 @@ export function RightPanel({
   onReplacePlayer,
   activeTab,
   onTabChange,
+  strategyReasoning,
 }: RightPanelProps) {
   const [showReplacement, setShowReplacement] = useState(false);
   const [replacementCandidates, setReplacementCandidates] = useState<ReplacementCandidate[]>([]);
@@ -55,12 +58,16 @@ export function RightPanel({
     setShowReplacement(false);
   }, [selectedPlayer?.id]);
 
-  const handleReplace = () => {
+  const handleReplace = async () => {
     if (!selectedPlayer) return;
     const squadIds = allPlayers.filter((p): p is Player => p !== null).map(p => p.id);
-    const candidates = getReplacementCandidates(selectedPosition, selectedPlayer.id, squadIds);
-    setReplacementCandidates(candidates);
-    setShowReplacement(true);
+    try {
+      const candidates = await getReplacementCandidatesAPI(selectedPosition, selectedPlayer.id, squadIds);
+      setReplacementCandidates(candidates);
+      setShowReplacement(true);
+    } catch (err) {
+      console.error('Failed to get replacements:', err);
+    }
   };
 
   const handleSelectReplacement = (candidate: Player) => {
@@ -103,6 +110,7 @@ export function RightPanel({
             budgetCap={budgetCap}
             budgetEnabled={budgetEnabled}
             allPlayers={allPlayers}
+            strategyReasoning={strategyReasoning}
           />
         ) : showReplacement && selectedPlayer ? (
           <ReplacementView
@@ -137,6 +145,7 @@ function SquadOverview({
   budgetCap,
   budgetEnabled,
   allPlayers,
+  strategyReasoning,
 }: {
   formation: Formation;
   buildUpStyle: BuildUpStyle;
@@ -148,6 +157,7 @@ function SquadOverview({
   budgetCap: number;
   budgetEnabled: boolean;
   allPlayers: (Player | null)[];
+  strategyReasoning?: string;
 }) {
   const [expandedAverages, setExpandedAverages] = useState(false);
 
@@ -160,7 +170,7 @@ function SquadOverview({
   const midPlayers = validPlayers.filter(p => ['LM', 'CM', 'CDM', 'CAM', 'RM'].includes(p.position));
   const atkPlayers = validPlayers.filter(p => ['LW', 'ST', 'RW'].includes(p.position));
 
-  const reasoning = getSquadStrategyReasoning(formation, buildUpStyle, defensiveApproach, budgetCap, budgetEnabled);
+  const reasoning = strategyReasoning || 'Build a squad to see AI strategy reasoning here.';
 
   return (
     <div className="space-y-5">
@@ -345,7 +355,7 @@ function PlayerDetailsView({
     { stat: 'PHY', value: player.stats.physical, fullMark: 100 }
   ];
 
-  const reasoning = getAIReasoning(player, position, formation);
+  const reasoning = player.justification || `Selected for the ${position} role in ${formation} formation. Rating: ${player.rating}.`;
 
   return (
     <div className="space-y-5">

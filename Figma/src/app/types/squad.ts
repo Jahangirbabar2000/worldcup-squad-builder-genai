@@ -20,6 +20,7 @@ export interface Player {
   price: number; // in millions
   height: number; // in cm
   locked?: boolean;
+  justification?: string;
 }
 
 export type Formation = '4-3-3' | '3-5-2' | '4-4-2' | '4-2-3-1' | '3-4-3';
@@ -31,6 +32,7 @@ export interface SquadSlot {
   player: Player | null;
   x: number; // percentage from left
   y: number; // percentage from top
+  alternatives?: Player[];
 }
 
 export interface SquadConstraints {
