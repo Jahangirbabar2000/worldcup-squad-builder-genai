@@ -208,7 +208,7 @@ __marimo__/
 
 data/processed/
 data/cache/
-data/faiss_index/
+# data/faiss_index/  # Commented out - we need this in production
 .env
 
 # Node

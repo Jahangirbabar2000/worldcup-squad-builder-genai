@@ -1,11 +1,11 @@
 services:
   - type: web
-    name: squad-builder-api
+    name: worldcup-squad-builder-api
     runtime: python
-    buildCommand: cd backend && pip install -r requirements.txt
-    startCommand: cd backend && uvicorn app_api:app --host 0.0.0.0 --port $PORT
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app_api:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: OPENAI_API_KEY
         sync: false
       - key: PYTHON_VERSION
-        value: "3.13.0"
+        value: 3.11.0

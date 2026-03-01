@@ -46,6 +46,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.on_event("startup")
+async def startup_event():
+    """Load FAISS index at startup to avoid per-request loading."""
+    global _vector_store, _retriever
+    if os.path.isdir(FAISS_INDEX_PATH):
+        try:
+            logger.info("Loading FAISS index from disk at startup...")
+            _vector_store = retrieval.load_vector_store(FAISS_INDEX_PATH)
+            _retriever = retrieval.get_retriever(_vector_store, k=50)
+            logger.info("FAISS index loaded successfully.")
+        except Exception as e:
+            logger.error("Failed to load FAISS index: %s", e)
+    else:
+        logger.warning("No FAISS index found at %s. Will build on first request.", FAISS_INDEX_PATH)
+
 # ── Module-level cache ──────────────────────────────────────────────────────
 _documents: List[Any] = []
 _vector_store: Any = None
@@ -291,29 +306,35 @@ def ensure_documents_loaded() -> None:
 
 
 def ensure_data_loaded() -> None:
+    """Ensure vector store is loaded. Only load CSV if FAISS index doesn't exist."""
     global _documents, _vector_store, _retriever
-    ensure_documents_loaded()
-    if _vector_store is None:
-        if os.path.isdir(FAISS_INDEX_PATH):
-            try:
-                logger.info("Loading FAISS index from %s (skipping re-embedding)...", FAISS_INDEX_PATH)
-                _vector_store = retrieval.load_vector_store(FAISS_INDEX_PATH)
-                _retriever = retrieval.get_retriever(_vector_store, k=50)
-                logger.info("Vector store loaded from disk.")
-            except Exception as e:
-                logger.warning("Failed to load FAISS index, rebuilding: %s", e)
-                _vector_store = retrieval.create_vector_store(_documents)
-                retrieval.save_vector_store(_vector_store, FAISS_INDEX_PATH)
-                _retriever = retrieval.get_retriever(_vector_store, k=50)
-                logger.info("Vector store built and saved.")
-        else:
-            logger.info("Building FAISS vector store (first run)...")
-            _vector_store = retrieval.create_vector_store(_documents)
-            retrieval.save_vector_store(_vector_store, FAISS_INDEX_PATH)
-            _retriever = retrieval.get_retriever(_vector_store, k=50)
-            logger.info("Vector store ready and saved to %s", FAISS_INDEX_PATH)
-    else:
+    
+    if _vector_store is not None:
         logger.debug("Using cached vector store.")
+        return
+    
+    # Try loading from disk first (avoids CSV parsing and embedding)
+    if os.path.isdir(FAISS_INDEX_PATH):
+        try:
+            logger.info("Loading FAISS index from %s...", FAISS_INDEX_PATH)
+            _vector_store = retrieval.load_vector_store(FAISS_INDEX_PATH)
+            _retriever = retrieval.get_retriever(_vector_store, k=50)
+            logger.info("Vector store loaded from disk.")
+            return
+        except Exception as e:
+            logger.warning("Failed to load FAISS index: %s. Rebuilding...", e)
+    
+    # Only load documents if we need to rebuild FAISS
+    ensure_documents_loaded()
+    logger.info("Building FAISS vector store (first run or rebuild)...")
+    _vector_store = retrieval.create_vector_store(_documents)
+    retrieval.save_vector_store(_vector_store, FAISS_INDEX_PATH)
+    _retriever = retrieval.get_retriever(_vector_store, k=50)
+    logger.info("Vector store built and saved to %s", FAISS_INDEX_PATH)
+    
+    # Clear documents from memory after FAISS is built
+    _documents = []
+    logger.info("Cleared documents from memory to save RAM.")
 
 
 def retrieve_diverse_shortlist(query: str) -> List[Dict[str, Any]]:
