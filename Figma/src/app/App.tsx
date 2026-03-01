@@ -212,16 +212,11 @@ export default function App() {
     }
   };
 
-  // Handle player click from pitch
+  // Handle player click from pitch — always show details
   const handlePlayerClick = (index: number) => {
-    const slot = squadSlots[index];
-    if (slot?.player) {
-      if (slot.alternatives && slot.alternatives.length > 0) {
-        setSelectionModal({ source: 'pitch', index, position: slot.position });
-      } else {
-        setSelectedLocation({ source: 'pitch', index });
-        setRightPanelTab('details');
-      }
+    if (squadSlots[index]?.player) {
+      setSelectedLocation({ source: 'pitch', index });
+      setRightPanelTab('details');
     }
   };
 
@@ -243,6 +238,17 @@ export default function App() {
 
   // Handle empty slot click (opens selection modal)
   const handleEmptySlotClick = (source: 'pitch' | 'bench' | 'reserve', index: number, position: string) => {
+    setSelectionModal({ source, index, position });
+  };
+
+  // Open the selection modal for the currently selected player's slot (replace flow)
+  const handleOpenReplaceModal = () => {
+    if (!selectedLocation) return;
+    const { source, index } = selectedLocation;
+    let position = '';
+    if (source === 'pitch') position = squadSlots[index]?.position || '';
+    else if (source === 'bench') position = benchSlots[index]?.position || 'SUB';
+    else if (source === 'reserve') position = reserveSlots[index]?.position || 'RES';
     setSelectionModal({ source, index, position });
   };
 
@@ -432,6 +438,7 @@ export default function App() {
                 selectedPosition={selectedPosition}
                 onToggleLock={handleToggleLock}
                 onReplacePlayer={handleReplacePlayer}
+                onOpenReplace={handleOpenReplaceModal}
                 activeTab={rightPanelTab}
                 onTabChange={setRightPanelTab}
                 strategyReasoning={strategyReasoning}
@@ -488,7 +495,11 @@ export default function App() {
         alternatives={
           selectionModal?.source === 'pitch'
             ? squadSlots[selectionModal.index]?.alternatives
-            : undefined
+            : selectionModal?.source === 'bench'
+              ? benchSlots[selectionModal.index]?.alternatives
+              : selectionModal?.source === 'reserve'
+                ? reserveSlots[selectionModal.index]?.alternatives
+                : undefined
         }
         existingPlayerIds={allPlayers.filter((p): p is Player => p !== null).map(p => p.id)}
         onSelect={handleModalSelect}

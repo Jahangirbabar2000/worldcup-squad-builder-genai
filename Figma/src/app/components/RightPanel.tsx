@@ -1,9 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Player, PlayerStats, Formation, BuildUpStyle, DefensiveApproach } from '../types/squad';
 import { getStatColor, calculateAverageStats, calculateAverageHeight } from '../utils/squadCalculations';
-import { getReplacementCandidates as getReplacementCandidatesAPI, ReplacementCandidate } from '../api';
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, ResponsiveContainer } from 'recharts';
-import { ChevronDown, ChevronUp, ArrowLeft } from 'lucide-react';
+import { ChevronDown, ChevronUp } from 'lucide-react';
 
 interface RightPanelProps {
   // Squad overview data
@@ -24,6 +23,7 @@ interface RightPanelProps {
   selectedPosition: string;
   onToggleLock: () => void;
   onReplacePlayer: (newPlayer: Player) => void;
+  onOpenReplace: () => void;
   // Active tab control
   activeTab: 'overview' | 'details';
   onTabChange: (tab: 'overview' | 'details') => void;
@@ -46,35 +46,11 @@ export function RightPanel({
   selectedPosition,
   onToggleLock,
   onReplacePlayer,
+  onOpenReplace,
   activeTab,
   onTabChange,
   strategyReasoning,
 }: RightPanelProps) {
-  const [showReplacement, setShowReplacement] = useState(false);
-  const [replacementCandidates, setReplacementCandidates] = useState<ReplacementCandidate[]>([]);
-
-  // Reset replacement view when player changes
-  useEffect(() => {
-    setShowReplacement(false);
-  }, [selectedPlayer?.id]);
-
-  const handleReplace = async () => {
-    if (!selectedPlayer) return;
-    const squadIds = allPlayers.filter((p): p is Player => p !== null).map(p => p.id);
-    try {
-      const candidates = await getReplacementCandidatesAPI(selectedPosition, selectedPlayer.id, squadIds);
-      setReplacementCandidates(candidates);
-      setShowReplacement(true);
-    } catch (err) {
-      console.error('Failed to get replacements:', err);
-    }
-  };
-
-  const handleSelectReplacement = (candidate: Player) => {
-    onReplacePlayer(candidate);
-    setShowReplacement(false);
-  };
-
   return (
     <div className="bg-[#222244] rounded-lg border border-[#4ade80]/20 sticky top-20">
       {/* Segmented toggle */}
@@ -112,19 +88,12 @@ export function RightPanel({
             allPlayers={allPlayers}
             strategyReasoning={strategyReasoning}
           />
-        ) : showReplacement && selectedPlayer ? (
-          <ReplacementView
-            position={selectedPosition}
-            candidates={replacementCandidates}
-            onSelect={handleSelectReplacement}
-            onBack={() => setShowReplacement(false)}
-          />
         ) : (
           <PlayerDetailsView
             player={selectedPlayer}
             position={selectedPosition}
             formation={formation}
-            onReplace={handleReplace}
+            onReplace={onOpenReplace}
             onToggleLock={onToggleLock}
           />
         )}
@@ -417,75 +386,3 @@ function PlayerDetailsView({
   );
 }
 
-/* ─── Replacement View ─── */
-function ReplacementView({
-  position,
-  candidates,
-  onSelect,
-  onBack,
-}: {
-  position: string;
-  candidates: ReplacementCandidate[];
-  onSelect: (player: Player) => void;
-  onBack: () => void;
-}) {
-  return (
-    <div className="space-y-4">
-      {/* Header */}
-      <div>
-        <button onClick={onBack} className="flex items-center gap-1 text-sm text-gray-400 hover:text-white transition-colors mb-2">
-          <ArrowLeft className="w-4 h-4" />
-          <span>Back to player</span>
-        </button>
-        <h3 className="text-lg font-bold text-white">Recommended Replacements</h3>
-        <span className="text-xs text-gray-400">for {position}</span>
-      </div>
-
-      {/* Candidate list */}
-      <div className="space-y-2 max-h-[500px] overflow-y-auto custom-scrollbar">
-        {candidates.length === 0 ? (
-          <div className="text-sm text-gray-500 text-center py-8">No replacement candidates available.</div>
-        ) : (
-          candidates.map(({ player, reason }) => (
-            <div key={player.id} className="bg-[#1a1a2e] rounded-lg p-3 border border-gray-700 hover:border-[#4ade80]/40 transition-colors">
-              <div className="flex items-start justify-between">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-white font-medium text-sm">{player.name}</span>
-                    <span className="text-xs">{player.countryFlag}</span>
-                  </div>
-                  <div className="text-xs text-gray-500 mt-0.5">{player.club}</div>
-                  <p className="text-xs text-gray-400 mt-1 leading-relaxed">{reason}</p>
-                  {/* Compact stat row */}
-                  <div className="flex gap-3 mt-2">
-                    {[
-                      { l: 'PAC', v: player.stats.pace },
-                      { l: 'DEF', v: player.stats.defending },
-                      { l: 'PHY', v: player.stats.physical },
-                    ].map(s => (
-                      <div key={s.l} className="flex items-center gap-1">
-                        <span className="text-[10px] text-gray-600">{s.l}</span>
-                        <span className={`text-xs font-bold ${getStatColor(s.v)}`}>{s.v}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                <div className="flex flex-col items-center gap-2 ml-3">
-                  <div className="w-9 h-9 rounded-full bg-[#d4a843] flex items-center justify-center">
-                    <span className="text-[#1a1a2e] font-bold text-xs">{player.rating}</span>
-                  </div>
-                  <button
-                    onClick={() => onSelect(player)}
-                    className="px-3 py-1 bg-[#4ade80] text-[#1a1a2e] rounded text-xs font-medium hover:bg-[#3bc96d] transition-colors"
-                  >
-                    Select
-                  </button>
-                </div>
-              </div>
-            </div>
-          ))
-        )}
-      </div>
-    </div>
-  );
-}
