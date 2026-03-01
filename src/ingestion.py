@@ -30,13 +30,19 @@ POSITION_TO_CATEGORY = {
 }
 
 REQUIRED_COLUMNS = [
-    "overall", "pace", "shooting", "passing", "dribbling", "defending", "physic",
-    "player_positions", "wage_eur",
+    "overall", "player_positions", "wage_eur",
+]
+
+OUTFIELD_STAT_COLUMNS = ["pace", "shooting", "passing", "dribbling", "defending", "physic"]
+
+GK_STAT_COLUMNS = [
+    "gk_diving", "gk_handling", "gk_kicking", "gk_reflexes", "gk_speed", "gk_positioning",
 ]
 
 SELECT_COLUMNS = [
     "short_name", "long_name", "player_positions", "primary_position",
     "overall", "potential", "pace", "shooting", "passing", "dribbling", "defending", "physic",
+    "gk_diving", "gk_handling", "gk_kicking", "gk_reflexes", "gk_speed", "gk_positioning",
     "value_eur", "wage_eur", "age", "nationality_name", "club_name",
     "skill_moves", "weak_foot", "skill_fk_accuracy",
     "movement_sprint_speed", "movement_acceleration",
@@ -60,7 +66,7 @@ def load_raw_data(filepath: str = "data/raw/male_players.csv") -> pd.DataFrame:
 
 def clean_data(df: pd.DataFrame) -> pd.DataFrame:
     """Clean and normalize the raw FIFA player DataFrame."""
-    # Drop rows with nulls in critical columns
+    # Drop rows with nulls in universally required columns
     for col in REQUIRED_COLUMNS:
         if col not in df.columns:
             continue
@@ -75,6 +81,33 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
 
     df["primary_position"] = df["player_positions"].apply(map_primary_position)
     df = df.dropna(subset=["primary_position"])
+
+    # Separate GKs and outfield players for stat handling
+    is_gk = df["primary_position"] == "GK"
+
+    # Drop outfield players missing outfield stats
+    outfield = df[~is_gk].copy()
+    for col in OUTFIELD_STAT_COLUMNS:
+        if col in outfield.columns:
+            outfield = outfield.dropna(subset=[col])
+
+    # For GKs: fill missing outfield stats with GK equivalents or 0
+    gk = df[is_gk].copy()
+    gk_fill_map = {
+        "pace": "gk_speed",
+        "shooting": "gk_kicking",
+        "passing": "gk_kicking",
+        "dribbling": "gk_handling",
+        "defending": "gk_positioning",
+        "physic": "gk_reflexes",
+    }
+    for outfield_col, gk_col in gk_fill_map.items():
+        if outfield_col in gk.columns and gk_col in gk.columns:
+            gk[outfield_col] = gk[outfield_col].fillna(gk[gk_col])
+        if outfield_col in gk.columns:
+            gk[outfield_col] = gk[outfield_col].fillna(0)
+
+    df = pd.concat([outfield, gk], ignore_index=True)
 
     # Select only columns we need (that exist)
     available = [c for c in SELECT_COLUMNS if c in df.columns]

@@ -231,6 +231,26 @@ def transform_player(player_data: Dict[str, Any]) -> Dict[str, Any]:
     first_position = positions[0] if positions else str(player_data.get("primary_position") or "ST")
     value_eur = _safe_float(player_data.get("value_eur", 0))
 
+    is_gk = first_position == "GK"
+    if is_gk:
+        stats = {
+            "pace": _safe_int(player_data.get("gk_speed", player_data.get("pace"))),
+            "shooting": _safe_int(player_data.get("gk_kicking", player_data.get("shooting"))),
+            "passing": _safe_int(player_data.get("gk_kicking", player_data.get("passing"))),
+            "dribbling": _safe_int(player_data.get("gk_handling", player_data.get("dribbling"))),
+            "defending": _safe_int(player_data.get("gk_positioning", player_data.get("defending"))),
+            "physical": _safe_int(player_data.get("gk_reflexes", player_data.get("physic"))),
+        }
+    else:
+        stats = {
+            "pace": _safe_int(player_data.get("pace")),
+            "shooting": _safe_int(player_data.get("shooting")),
+            "passing": _safe_int(player_data.get("passing")),
+            "dribbling": _safe_int(player_data.get("dribbling")),
+            "defending": _safe_int(player_data.get("defending")),
+            "physical": _safe_int(player_data.get("physic")),
+        }
+
     return {
         "id": _player_id(player_data),
         "name": player_data.get("short_name", player_data.get("long_name", "Unknown")),
@@ -240,14 +260,7 @@ def transform_player(player_data: Dict[str, Any]) -> Dict[str, Any]:
         "countryFlag": COUNTRY_FLAGS.get(player_data.get("nationality_name", ""), "🏳️"),
         "club": player_data.get("club_name", ""),
         "age": _safe_int(player_data.get("age")),
-        "stats": {
-            "pace": _safe_int(player_data.get("pace")),
-            "shooting": _safe_int(player_data.get("shooting")),
-            "passing": _safe_int(player_data.get("passing")),
-            "dribbling": _safe_int(player_data.get("dribbling")),
-            "defending": _safe_int(player_data.get("defending")),
-            "physical": _safe_int(player_data.get("physic")),
-        },
+        "stats": stats,
         "price": round(value_eur / 1_000_000, 1) if value_eur else 0,
         "height": _safe_int(player_data.get("height_cm")),
         "justification": player_data.get("justification", ""),
