@@ -169,8 +169,8 @@ def build_squad(
     )
     candidates_text = _shortlist_to_candidates_text(shortlist)
 
-    for attempt in range(3):
-        logger.info("LLM reasoning attempt %d/3", attempt + 1)
+    for attempt in range(2):
+        logger.info("LLM reasoning attempt %d/2", attempt + 1)
         try:
             chain = REASONING_PROMPT | llm
             resp = chain.invoke({
@@ -194,6 +194,6 @@ def build_squad(
                         s[k] = v
         if validate_squad(squad, constraints):
             return squad
-        if attempt < 2:
+        if attempt < 1:
             constraints_text += "\n[Previous selection violated constraints; try again with exactly these rules.]"
     return squad

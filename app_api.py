@@ -53,6 +53,14 @@ _retriever: Any = None
 _last_shortlist: List[Dict[str, Any]] = []
 _last_squad: Dict[str, Any] = {}
 
+# Persisted FAISS index path (avoid re-embedding 16k docs on every server start)
+FAISS_INDEX_PATH = "data/faiss_index"
+
+# Pipeline response cache: same request returns cached result (no extra API calls)
+_response_cache: Dict[str, Dict[str, Any]] = {}
+_response_cache_max_size = 100
+_response_cache_keys: List[str] = []  # order for LRU eviction
+
 # ── Formation Templates (must mirror the frontend exactly) ──────────────────
 FORMATION_TEMPLATES: Dict[str, List[Dict[str, Any]]] = {
     "4-3-3": [
@@ -272,29 +280,44 @@ def ensure_data_loaded() -> None:
     global _documents, _vector_store, _retriever
     ensure_documents_loaded()
     if _vector_store is None:
-        logger.info("Building FAISS vector store and retriever...")
-        _vector_store = retrieval.create_vector_store(_documents)
-        _retriever = retrieval.get_retriever(_vector_store, k=50)
-        logger.info("Vector store ready.")
+        if os.path.isdir(FAISS_INDEX_PATH):
+            try:
+                logger.info("Loading FAISS index from %s (skipping re-embedding)...", FAISS_INDEX_PATH)
+                _vector_store = retrieval.load_vector_store(FAISS_INDEX_PATH)
+                _retriever = retrieval.get_retriever(_vector_store, k=50)
+                logger.info("Vector store loaded from disk.")
+            except Exception as e:
+                logger.warning("Failed to load FAISS index, rebuilding: %s", e)
+                _vector_store = retrieval.create_vector_store(_documents)
+                retrieval.save_vector_store(_vector_store, FAISS_INDEX_PATH)
+                _retriever = retrieval.get_retriever(_vector_store, k=50)
+                logger.info("Vector store built and saved.")
+        else:
+            logger.info("Building FAISS vector store (first run)...")
+            _vector_store = retrieval.create_vector_store(_documents)
+            retrieval.save_vector_store(_vector_store, FAISS_INDEX_PATH)
+            _retriever = retrieval.get_retriever(_vector_store, k=50)
+            logger.info("Vector store ready and saved to %s", FAISS_INDEX_PATH)
     else:
         logger.debug("Using cached vector store.")
 
 
 def retrieve_diverse_shortlist(query: str) -> List[Dict[str, Any]]:
-    """Retrieve a broad shortlist covering all positions."""
+    """Retrieve a broad shortlist covering all positions (1 main query + 2 supplements to limit embedding calls)."""
     logger.info("Retrieving shortlist for query: %s", query[:80] if query else "(empty)")
     ensure_data_loaded()
 
-    docs = retrieval.retrieve_players(query, _retriever)
+    # Main query with larger k to get diverse players in one call
+    main_ret = retrieval.get_retriever(_vector_store, k=60)
+    docs = list(retrieval.retrieve_players(query, main_ret))
 
+    # Two supplement queries instead of four to reduce embedding API cost
     supplement_queries = [
-        "top rated goalkeepers",
-        "best defenders strong tackling pace",
-        "skilled midfielders creative passing",
-        "fast forwards clinical finishing",
+        "top rated goalkeepers and defenders",
+        "skilled midfielders and forwards creative passing",
     ]
     for sq in supplement_queries:
-        extra_ret = retrieval.get_retriever(_vector_store, k=10)
+        extra_ret = retrieval.get_retriever(_vector_store, k=15)
         docs.extend(retrieval.retrieve_players(sq, extra_ret))
 
     seen: set[str] = set()
@@ -441,6 +464,31 @@ class ReplaceRequest(BaseModel):
 # ── Shared pipeline logic ──────────────────────────────────────────────────
 
 
+def _pipeline_cache_key(
+    query: str,
+    formation: str,
+    build_up_style: str,
+    defensive_approach: str,
+    budget: float,
+    budget_enabled: bool,
+    cons: SquadConstraints,
+) -> str:
+    """Stable cache key for pipeline response caching."""
+    key_dict = {
+        "query": query or "",
+        "formation": formation,
+        "build_up_style": build_up_style,
+        "defensive_approach": defensive_approach,
+        "budget": budget,
+        "budget_enabled": budget_enabled,
+        "minGK": cons.minGK,
+        "minDEF": cons.minDEF,
+        "minMID": cons.minMID,
+        "minFWD": cons.minFWD,
+    }
+    return hashlib.md5(json.dumps(key_dict, sort_keys=True).encode()).hexdigest()
+
+
 def _run_pipeline(
     query: str,
     formation: str,
@@ -450,7 +498,12 @@ def _run_pipeline(
     budget_enabled: bool,
     cons: SquadConstraints,
 ) -> Dict[str, Any]:
-    global _last_shortlist, _last_squad
+    global _last_shortlist, _last_squad, _response_cache, _response_cache_keys
+
+    cache_key = _pipeline_cache_key(query, formation, build_up_style, defensive_approach, budget, budget_enabled, cons)
+    if cache_key in _response_cache:
+        logger.info("Returning cached pipeline result for key %s", cache_key[:8])
+        return _response_cache[cache_key]
 
     shortlist = retrieve_diverse_shortlist(query)
     _last_shortlist = shortlist
@@ -529,7 +582,7 @@ def _run_pipeline(
         candidates.sort(key=lambda c: _safe_int(c.get("overall")), reverse=True)
         slot["alternatives"] = [transform_player(c) for c in candidates[:5]]
 
-    return {
+    result = {
         "pitchSlots": pitch_slots,
         "benchSlots": bench_slots,
         "reserveSlots": reserve_slots,
@@ -537,6 +590,16 @@ def _run_pipeline(
         "aiMessage": ai_message,
         "excluded": squad.get("excluded", []),
     }
+
+    # Cache result for identical requests (avoid repeated API calls)
+    if len(_response_cache) >= _response_cache_max_size and _response_cache_keys:
+        oldest = _response_cache_keys.pop(0)
+        _response_cache.pop(oldest, None)
+    _response_cache[cache_key] = result
+    if cache_key not in _response_cache_keys:
+        _response_cache_keys.append(cache_key)
+
+    return result
 
 
 def _infer_tactics_from_message(message: str) -> Tuple[str, str, str]:

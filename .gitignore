@@ -208,6 +208,7 @@ __marimo__/
 
 data/processed/
 data/cache/
+data/faiss_index/
 .env
 
 # Node
