@@ -37,6 +37,7 @@ export interface SquadSlot {
 
 export interface SquadConstraints {
   minGK: number;
+  maxGK: number;
   minDEF: number;
   minMID: number;
   minFWD: number;

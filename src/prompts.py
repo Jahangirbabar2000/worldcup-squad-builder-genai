@@ -15,33 +15,44 @@ Search query:""",
 
 REASONING_PROMPT = PromptTemplate(
     input_variables=["candidates", "constraints", "user_preferences"],
-    template="""You are selecting a World Cup squad from a list of candidate players. You must respect ALL hard constraints and optional budget if given.
+    template="""You are selecting a World Cup squad of exactly 23 players from a list of candidates.
 
-CONSTRAINTS:
+HARD CONSTRAINTS (must be obeyed exactly):
 {constraints}
 
-USER PREFERENCES (apply when possible):
+CRITICAL RULES:
+- Select EXACTLY 23 players total. No more, no less.
+- Select EXACTLY 3 goalkeepers (GK). Never more than 3.
+- Default composition: 3 GK, 8 DEF, 7 MID, 5 FWD = 23. Respect the min counts from constraints.
+- POSITION ACCURACY: Each player's primary_position MUST match where they are assigned.
+  Do NOT put a right back (RB) at left back (LB) or vice versa.
+  Do NOT put a right winger (RW) at left wing (LW) or vice versa.
+  Every player must play in their natural position — no side-swapping.
+- If a budget constraint is specified in user preferences, the total value_eur of all 23 selected players must NOT exceed that budget. Build the strongest squad possible within the budget.
+- If NO budget is specified, ignore cost entirely and pick the best players.
+
+USER PREFERENCES:
 {user_preferences}
 
-CANDIDATE PLAYERS (each line is one player with stats):
+CANDIDATE PLAYERS (each line: name | position | overall | wage/value | stats | age | nationality | club):
 {candidates}
 
 TASK:
-1. Select exactly the maximum number of players allowed, meeting minimums for each position (GK, DEF, MID, FWD).
-2. If a total wage budget is specified, the sum of selected players' wage_eur must not exceed it.
-3. For each selected player, write a 1-2 sentence justification that references their actual stats (e.g. pace, overall, defending).
+1. Select exactly 23 players meeting all position minimums and maximums above.
+2. Ensure every player's listed position matches the role they would fill.
+3. For each selected player, write a 1-2 sentence justification referencing their actual stats.
 4. List a few notable excluded players and briefly why they were cut.
-5. State any tradeoffs (e.g. "sacrificed depth in midfield to stay under budget").
+5. Explain tradeoffs made (e.g. budget sacrifices, positional depth choices).
 
 OUTPUT FORMAT (use this exact structure so it can be parsed):
 ---SELECTED---
-[For each player list: short_name | primary_position | overall | wage_eur | justification text]
+[For each player: short_name | primary_position | overall | wage_eur | justification text]
 ---EXCLUDED---
 [short_name | reason]
 ---TOTAL_WAGE---
 [sum of selected wage_eur]
 ---FORMATION_NOTES---
-[2-3 sentences on positional balance and tradeoffs]
+[2-3 sentences on positional balance, tradeoffs, and budget rationale if applicable]
 """,
 )
 

@@ -22,9 +22,10 @@ export default function App() {
   const [budgetEnabled, setBudgetEnabled] = useState(false);
   const [constraints, setConstraints] = useState<SquadConstraints>({
     minGK: 3,
-    minDEF: 4,
-    minMID: 4,
-    minFWD: 2
+    maxGK: 3,
+    minDEF: 8,
+    minMID: 7,
+    minFWD: 5,
   });
 
   const [squadSlots, setSquadSlots] = useState<SquadSlot[]>(formationTemplates[formation]);

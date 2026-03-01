@@ -131,9 +131,10 @@ def validate_squad(squad: Dict[str, Any], constraints: Dict[str, Any]) -> bool:
 
     max_players = constraints.get("max_players", 23)
     min_gk = constraints.get("min_gk", 3)
-    min_def = constraints.get("min_def", 6)
-    min_mid = constraints.get("min_mid", 6)
-    min_fwd = constraints.get("min_fwd", 4)
+    max_gk = constraints.get("max_gk", 3)
+    min_def = constraints.get("min_def", 8)
+    min_mid = constraints.get("min_mid", 7)
+    min_fwd = constraints.get("min_fwd", 5)
     budget = constraints.get("budget")
 
     if len(selected) > max_players:
@@ -143,7 +144,9 @@ def validate_squad(squad: Dict[str, Any], constraints: Dict[str, Any]) -> bool:
         pos = (p.get("primary_position") or "").upper()
         if pos in counts:
             counts[pos] += 1
-    if counts["GK"] < min_gk or counts["DEF"] < min_def or counts["MID"] < min_mid or counts["FWD"] < min_fwd:
+    if counts["GK"] < min_gk or counts["GK"] > max_gk:
+        return False
+    if counts["DEF"] < min_def or counts["MID"] < min_mid or counts["FWD"] < min_fwd:
         return False
     if budget is not None and total_wage > float(budget):
         return False
@@ -159,13 +162,15 @@ def build_squad(
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
     max_players = constraints.get("max_players", 23)
     min_gk = constraints.get("min_gk", 3)
-    min_def = constraints.get("min_def", 6)
-    min_mid = constraints.get("min_mid", 6)
-    min_fwd = constraints.get("min_fwd", 4)
+    max_gk = constraints.get("max_gk", 3)
+    min_def = constraints.get("min_def", 8)
+    min_mid = constraints.get("min_mid", 7)
+    min_fwd = constraints.get("min_fwd", 5)
     budget = constraints.get("budget")
     constraints_text = (
-        f"max_players={max_players}, min_gk={min_gk}, min_def={min_def}, min_mid={min_mid}, min_fwd={min_fwd}"
-        + (f", budget (total wage EUR)={budget}" if budget is not None else "")
+        f"max_players={max_players}, min_gk={min_gk}, max_gk={max_gk}, "
+        f"min_def={min_def}, min_mid={min_mid}, min_fwd={min_fwd}"
+        + (f", budget (total value EUR)={budget}" if budget is not None else "")
     )
     candidates_text = _shortlist_to_candidates_text(shortlist)
 

@@ -11,6 +11,7 @@ interface InputPanelProps {
   budgetEnabled: boolean;
   constraints: {
     minGK: number;
+    maxGK: number;
     minDEF: number;
     minMID: number;
     minFWD: number;
@@ -163,32 +164,42 @@ export function InputPanel({
           </svg>
         </button>
 
-        {constraintsOpen && (
+        {constraintsOpen && (() => {
+          const total = constraints.minGK + constraints.minDEF + constraints.minMID + constraints.minFWD;
+          const remaining = 23 - total;
+          return (
           <div className="mt-3 space-y-3">
-            {/* Fixed label */}
-            <div className="text-xs text-gray-500 bg-[#1a1a2e] rounded-lg px-3 py-2">
-              Max 23 Players
+            <div className={`text-xs bg-[#1a1a2e] rounded-lg px-3 py-2 flex justify-between ${total !== 23 ? 'text-red-400' : 'text-gray-500'}`}>
+              <span>Squad: {total}/23 players</span>
+              {remaining !== 0 && <span>{remaining > 0 ? `${remaining} slots unassigned` : `${-remaining} over limit`}</span>}
             </div>
             <div className="grid grid-cols-2 gap-3">
+              {/* GK - fixed at 3 */}
+              <div className="flex items-center justify-between bg-[#1a1a2e] rounded-lg px-3 py-2">
+                <span className="text-xs text-gray-400">GK</span>
+                <span className="text-white text-sm w-6 text-center">3</span>
+              </div>
+              {/* DEF, MID, FWD - adjustable */}
               {[
-                { label: 'Min GK', field: 'minGK' as const, min: 3 },
-                { label: 'Min DEF', field: 'minDEF' as const, min: 0 },
-                { label: 'Min MID', field: 'minMID' as const, min: 0 },
-                { label: 'Min FWD', field: 'minFWD' as const, min: 0 }
-              ].map(({ label, field, min }) => (
+                { label: 'DEF', field: 'minDEF' as const, min: 4, max: 12 },
+                { label: 'MID', field: 'minMID' as const, min: 3, max: 10 },
+                { label: 'FWD', field: 'minFWD' as const, min: 2, max: 8 }
+              ].map(({ label, field, min, max }) => (
                 <div key={field} className="flex items-center justify-between bg-[#1a1a2e] rounded-lg px-3 py-2">
                   <span className="text-xs text-gray-400">{label}</span>
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => onConstraintChange(field, Math.max(min, constraints[field] - 1))}
-                      className="w-6 h-6 rounded bg-gray-700 hover:bg-gray-600 text-white flex items-center justify-center text-sm"
+                      disabled={constraints[field] <= min}
+                      className="w-6 h-6 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed text-white flex items-center justify-center text-sm"
                     >
                       -
                     </button>
                     <span className="text-white text-sm w-6 text-center">{constraints[field]}</span>
                     <button
-                      onClick={() => onConstraintChange(field, constraints[field] + 1)}
-                      className="w-6 h-6 rounded bg-gray-700 hover:bg-gray-600 text-white flex items-center justify-center text-sm"
+                      onClick={() => onConstraintChange(field, Math.min(max, constraints[field] + 1))}
+                      disabled={constraints[field] >= max || total >= 23}
+                      className="w-6 h-6 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed text-white flex items-center justify-center text-sm"
                     >
                       +
                     </button>
@@ -197,7 +208,8 @@ export function InputPanel({
               ))}
             </div>
           </div>
-        )}
+          );
+        })()}
       </div>
 
       {/* Rebuild button (always visible when config changes possible) */}

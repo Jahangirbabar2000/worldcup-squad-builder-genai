@@ -136,12 +136,12 @@ SLOT_COMPATIBLE_POSITIONS: Dict[str, List[str]] = {
     "LB": ["LB", "LWB"],
     "RB": ["RB", "RWB"],
     "CDM": ["CDM", "CM"],
-    "CM": ["CM", "CDM", "CAM", "LCM", "RCM"],
-    "CAM": ["CAM", "CM", "CF"],
-    "LM": ["LM", "LW", "LF"],
-    "RM": ["RM", "RW", "RF"],
-    "LW": ["LW", "LM", "LF"],
-    "RW": ["RW", "RM", "RF"],
+    "CM": ["CM", "CDM", "CAM"],
+    "CAM": ["CAM", "CF"],
+    "LM": ["LM", "LW"],
+    "RM": ["RM", "RW"],
+    "LW": ["LW", "LF"],
+    "RW": ["RW", "RF"],
     "ST": ["ST", "CF"],
 }
 
@@ -335,13 +335,14 @@ def retrieve_diverse_shortlist(query: str) -> List[Dict[str, Any]]:
 def assign_to_formation(
     selected_players: List[Dict[str, Any]], formation: str
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """Place players into pitch slots (11), bench (7), reserves (up to 5)."""
+    """Place players into pitch slots (11), bench (7), reserves (up to 5).
+    Uses strict position matching: sided positions (LB/RB, LW/RW) are never swapped."""
     selected_players = [p for p in selected_players if isinstance(p, dict)]
     template = FORMATION_TEMPLATES.get(formation, FORMATION_TEMPLATES["4-3-3"])
     available = list(range(len(selected_players)))
     slot_player: List[Optional[int]] = [None] * len(template)
 
-    # Pass 1: exact first-position match
+    # Pass 1: exact first-position match (highest priority)
     for si, slot in enumerate(template):
         for pi in list(available):
             positions = _get_specific_positions(selected_players[pi])
@@ -350,7 +351,7 @@ def assign_to_formation(
                 available.remove(pi)
                 break
 
-    # Pass 2: compatible position match
+    # Pass 2: compatible position match (respects side constraints)
     for si, slot in enumerate(template):
         if slot_player[si] is not None:
             continue
@@ -360,23 +361,6 @@ def assign_to_formation(
                 slot_player[si] = pi
                 available.remove(pi)
                 break
-
-    # Pass 3: category match
-    for si, slot in enumerate(template):
-        if slot_player[si] is not None:
-            continue
-        for pi in list(available):
-            if _category_match(selected_players[pi], slot["position"]):
-                slot_player[si] = pi
-                available.remove(pi)
-                break
-
-    # Pass 4: any remaining
-    for si, slot in enumerate(template):
-        if slot_player[si] is not None:
-            continue
-        if available:
-            slot_player[si] = available.pop(0)
 
     pitch_slots = []
     for si, slot in enumerate(template):
@@ -430,9 +414,10 @@ def _enrich_selected_from_shortlist(
 
 class SquadConstraints(BaseModel):
     minGK: int = 3
-    minDEF: int = 4
-    minMID: int = 4
-    minFWD: int = 2
+    maxGK: int = 3
+    minDEF: int = 8
+    minMID: int = 7
+    minFWD: int = 5
 
 
 class BuildSquadRequest(BaseModel):
@@ -482,6 +467,7 @@ def _pipeline_cache_key(
         "budget": budget,
         "budget_enabled": budget_enabled,
         "minGK": cons.minGK,
+        "maxGK": cons.maxGK,
         "minDEF": cons.minDEF,
         "minMID": cons.minMID,
         "minFWD": cons.minFWD,
@@ -511,6 +497,7 @@ def _run_pipeline(
     constraints_dict: Dict[str, Any] = {
         "max_players": 23,
         "min_gk": cons.minGK,
+        "max_gk": cons.maxGK,
         "min_def": cons.minDEF,
         "min_mid": cons.minMID,
         "min_fwd": cons.minFWD,
@@ -524,8 +511,13 @@ def _run_pipeline(
     )
     if budget_enabled and budget > 0:
         user_prefs += (
-            f". IMPORTANT: Try to keep total squad value under {budget} million EUR. "
-            "Prefer lower-value players when skill levels are comparable."
+            f". BUDGET CONSTRAINT (MANDATORY): Total squad value_eur must NOT exceed €{budget} million EUR. "
+            f"Build the strongest possible squad within this €{budget}M limit. "
+            "If you cannot fit top-tier players, pick the best alternatives that keep total cost under budget."
+        )
+    else:
+        user_prefs += (
+            ". No budget constraint — select purely on quality and suitability."
         )
 
     logger.info("Calling reasoning.build_squad (LLM)...")
