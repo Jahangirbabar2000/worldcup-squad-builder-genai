@@ -8,7 +8,6 @@ openai
 pandas
 numpy
 matplotlib
-gradio
 fastapi
 uvicorn
 python-dotenv

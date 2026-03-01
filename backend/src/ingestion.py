@@ -20,6 +20,9 @@ from typing import List
 import pandas as pd
 from langchain_core.documents import Document
 
+# Get project root (two levels up from this file)
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+
 
 # Position mapping: raw comma-separated positions -> primary_position
 POSITION_TO_CATEGORY = {
@@ -51,8 +54,10 @@ SELECT_COLUMNS = [
 ]
 
 
-def load_raw_data(filepath: str = "data/raw/male_players.csv") -> pd.DataFrame:
+def load_raw_data(filepath: str = None) -> pd.DataFrame:
     """Load the raw FIFA player CSV and filter to fifa_version == 24."""
+    if filepath is None:
+        filepath = os.path.join(PROJECT_ROOT, "data/raw/male_players.csv")
     if not os.path.isfile(filepath):
         raise FileNotFoundError(
             f"Raw data not found at {filepath}. "
@@ -115,8 +120,10 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def cache_processed_data(df: pd.DataFrame, filepath: str = "data/processed/players_cleaned.csv") -> None:
+def cache_processed_data(df: pd.DataFrame, filepath: str = None) -> None:
     """Save cleaned DataFrame to CSV; create directory if needed."""
+    if filepath is None:
+        filepath = os.path.join(PROJECT_ROOT, "data/processed/players_cleaned.csv")
     os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
     df.to_csv(filepath, index=False)
 

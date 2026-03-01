@@ -62,7 +62,8 @@ _last_shortlist: List[Dict[str, Any]] = []
 _last_squad: Dict[str, Any] = {}
 
 # Persisted FAISS index path (avoid re-embedding 16k docs on every server start)
-FAISS_INDEX_PATH = "data/faiss_index"
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+FAISS_INDEX_PATH = os.path.join(PROJECT_ROOT, "data/faiss_index")
 
 # Pipeline response cache: same request returns cached result (no extra API calls)
 _response_cache: Dict[str, Dict[str, Any]] = {}
